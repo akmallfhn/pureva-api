@@ -1,0 +1,44 @@
+[project]
+name = "pureva-chat-agent"
+version = "0.1.0"
+description = "WhatsApp AI agent untuk Klinik Pureva Skin & Beauty (LangGraph + FastAPI)"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115.0",
+    "httpx>=0.27.0",
+    "langchain>=0.3.0",
+    "langchain-core>=0.3.0",
+    "langchain-openai>=0.2.0",
+    "langchain-anthropic>=0.2.0",
+    "langgraph>=0.2.0",
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.5.0",
+    "python-dotenv>=1.0.0",
+    "uvicorn[standard]>=0.30.0",
+    "tzdata>=2024.1; sys_platform == 'win32'",
+]
+
+[tool.uv]
+package = true
+
+[dependency-groups]
+dev = [
+    "ruff>=0.6.0",
+]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+"app/agents/*/prompts.py" = ["E501"]
+
+[project.scripts]
+dev = "app.scripts:dev"
+start = "app.scripts:start"
+seed = "app.db.seed:main"
