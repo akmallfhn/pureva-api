@@ -73,7 +73,6 @@ class WaConversation(Base):
     handler_id: Mapped[str | None] = mapped_column(UUID(as_uuid=False))
     lead_status: Mapped[str] = mapped_column(LEAD_STATUS_ENUM, server_default=text("'cold'"))
     winning_rate: Mapped[int] = mapped_column(SmallInteger, server_default=text("0"))
-    # `human` artinya admin ambil alih; agent tidak boleh ikut membalas.
     mode: Mapped[str] = mapped_column(MODE_ENUM, server_default=text("'ai'"))
     note: Mapped[str | None] = mapped_column(String)
     last_read_id: Mapped[str | None] = mapped_column(CHAR(21))
@@ -96,7 +95,6 @@ class WaChat(Base):
     reply_to_id: Mapped[str | None] = mapped_column(CHAR(21), ForeignKey("wa_chats.id"))
     type: Mapped[str] = mapped_column(CHAT_TYPE_ENUM)
     message: Mapped[str] = mapped_column(String)
-    # none_as_null: tanpa ini SQLAlchemy menulis literal JSON `null`, bukan SQL NULL.
     attachment: Mapped[Any | None] = mapped_column(JSON(none_as_null=True))
     status: Mapped[str | None] = mapped_column(CHAT_STATUS_ENUM)
     sent_at: Mapped[datetime | None]
