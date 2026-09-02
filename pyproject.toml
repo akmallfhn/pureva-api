@@ -12,6 +12,8 @@ dependencies = [
     "asyncpg>=0.30.0",
     "python-dotenv>=1.0.0",
     "uvicorn[standard]>=0.30.0",
+    # ZoneInfo butuh ini: Windows tidak punya tz database, image Linux slim juga sering tidak.
+    "tzdata>=2024.1",
 ]
 
 [tool.uv]

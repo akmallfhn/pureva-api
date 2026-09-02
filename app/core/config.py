@@ -24,6 +24,12 @@ class Settings(BaseSettings):
     )
     graph_api_version: str = "v25.0"
 
+    # Bearer token yang wajib dikirim client dashboard ke endpoint /api/v1/stats.
+    client_secret: str = ""
+
+    # Zona waktu default untuk bucket harian & heatmap statistik.
+    stat_timezone: str = "Asia/Jakarta"
+
     # Supabase Storage untuk attachment WhatsApp; bucket sama dengan yang dibaca UI pureva-ai.
     supabase_url: str = ""
     supabase_service_role_key: str = ""

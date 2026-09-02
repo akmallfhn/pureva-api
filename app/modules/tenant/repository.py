@@ -12,3 +12,6 @@ class TenantRepository:
         """Routing multitenant: nomor WhatsApp pengirim event menentukan tenant-nya."""
         stmt = select(Tenant).where(Tenant.wa_phone_number_id == phone_number_id).limit(1)
         return (await self._session.execute(stmt)).scalars().first()
+
+    async def find_by_id(self, tenant_id: str) -> Tenant | None:
+        return await self._session.get(Tenant, tenant_id)
