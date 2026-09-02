@@ -96,7 +96,8 @@ class WaChat(Base):
     reply_to_id: Mapped[str | None] = mapped_column(CHAR(21), ForeignKey("wa_chats.id"))
     type: Mapped[str] = mapped_column(CHAT_TYPE_ENUM)
     message: Mapped[str] = mapped_column(String)
-    attachment: Mapped[Any | None] = mapped_column(JSON)
+    # none_as_null: tanpa ini SQLAlchemy menulis literal JSON `null`, bukan SQL NULL.
+    attachment: Mapped[Any | None] = mapped_column(JSON(none_as_null=True))
     status: Mapped[str | None] = mapped_column(CHAT_STATUS_ENUM)
     sent_at: Mapped[datetime | None]
     delivered_at: Mapped[datetime | None]
