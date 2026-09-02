@@ -1,29 +1,33 @@
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    app_name: str = "Pureva WhatsApp Agent"
+    app_name: str = "Pureva API"
     debug: bool = False
 
-    # Auth webhook
-    agent_secret_key: str = ""
+    # Railway (dan PaaS lain) inject PORT saat runtime; APP_PORT fallback lokal.
+    port: int = Field(default=8000, validation_alias=AliasChoices("PORT", "APP_PORT"))
 
-    # LLM providers
-    openai_api_key: str = ""
-    anthropic_api_key: str = ""
+    # Postgres multitenant pureva, dipakai bareng app pureva-ai (Next.js).
+    database_url: str = ""
+    db_pool_size: int = 10
+    db_max_overflow: int = 0
 
-    # Model assignment (sesuai diagram arsitektur; bisa diganti dari .env)
-    # GPT-4o untuk node ringan (classifier, booking, send), GPT-4.5 untuk reasoning.
-    model_fast: str = "gpt-4o"
-    model_reasoning: str = "gpt-4.5-preview"
+    # Meta WhatsApp Cloud API: verifikasi webhook + download media.
+    meta_app_secret: str = ""
+    meta_webhook_verify_token: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "META_WEBHOOK_VERIFY_TOKEN", "WHATSAPP_WEBHOOK_VERIFICATION_TOKEN"
+        ),
+    )
+    graph_api_version: str = "v25.0"
 
-    # Meta WhatsApp Cloud API. Kalau kosong, agent jalan mode dry-run (log saja).
-    whatsapp_phone_number_id: str = ""
-    whatsapp_access_token: str = ""
-    whatsapp_api_url: str = "https://graph.facebook.com/v21.0"
-
-    # SQLite
-    database_path: str = "pureva.sqlite3"
+    # Supabase Storage untuk attachment WhatsApp; bucket sama dengan yang dibaca UI pureva-ai.
+    supabase_url: str = ""
+    supabase_service_role_key: str = ""
+    supabase_bucket: str = "pureva"
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 

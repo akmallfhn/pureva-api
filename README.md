@@ -1,65 +1,66 @@
-# Pureva WhatsApp Agent
+# Pureva API
 
-WhatsApp AI agent untuk **Klinik Pureva Skin & Beauty**, dibangun dengan **LangGraph + FastAPI (Python)**.
-Mengikuti pola arsitektur agent `wa-sales` di `sevenpreneur-agents`, tapi domainnya klinik kecantikan.
+Single backend untuk **Pureva**: menerima webhook WhatsApp Cloud API langsung dari Meta dan
+mencatatnya ke **Postgres multitenant** yang sama dengan app `pureva-ai` (Next.js).
 
-Knowledge base (treatment, jadwal dokter, promo) berasal dari CSV yang
-**di-seed ke SQLite** (di-"hardcode" sesuai permintaan), lalu di-query oleh node-node graph.
+Dibangun dengan **FastAPI + SQLAlchemy (async) + asyncpg**.
 
-## Arsitektur Graph
+Schema Postgres-nya dimiliki Prisma di repo `pureva-ai` — repo ini **tidak pernah** mengeluarkan
+DDL. Tabel yang dipakai: `tenants`, `wa_conversations`, `wa_chats`.
+
+## Alur
 
 ```
-WhatsApp User
-     │
+Meta WhatsApp Cloud API
+     │  POST /api/v1/webhook/whatsapp/callback   (signature X-Hub-Signature-256)
      ▼
-[1] Context Fetcher Node ──────── inject Shared State (treatment, jadwal dokter, promo)
-     │
+[routes]   balas 200 secepatnya, proses di background task
      ▼
-[2] Intent Classifier Node (GPT-4o) ── skin_consult | booking | complaint | general_info
-     │
-     ├── skin_consult ─▶ [3a] Skin Assessment & Recommendation (GPT-4.5, deep reasoning)
-     ├── booking ──────▶ [3b] Booking Node (GPT-4o, structured output + cek jadwal + buat booking)
-     ├── complaint ────▶ [3c] Complaint Node (GPT-4.5, empati + analisis + eskalasi)
-     └── general_info ─▶ [3d] General Info Node (GPT-4o)
-     │
-     ▼
-[4] Memory Node (Shared State Update, NO LLM) ── simpan histori percakapan + refresh konteks sesi
-     │
-     ▼
-[7] Send Message Node (GPT-4o, tone-adjusted) ── format WhatsApp (maks 1600 char) + kirim
-     │
-     ▼
-Respons ke User (via WhatsApp)
+[service]  tenant di-resolve dari metadata.phone_number_id  ─▶  multitenant
+     ├── messages            ─▶ wa_conversations (upsert) + wa_chats (inbound/user)
+     │     └── media         ─▶ download dari Graph API ─▶ upload Supabase Storage ─▶ storage_url
+     ├── smb_message_echoes  ─▶ wa_chats (outbound/admin)   pesan staff dari WA Business App
+     └── statuses            ─▶ update sent/delivered/read/failed + timestamp-nya
 ```
 
-Mapping model bisa diganti lewat `.env` (`MODEL_FAST`, `MODEL_REASONING`).
+Meta menjanjikan *at-least-once delivery* dan mengulang kirim kalau webhook tidak balas 200
+dengan cepat, jadi seluruh persistensi jalan di background task. Tiap pesan di-commit
+sendiri-sendiri: satu pesan gagal tidak menjatuhkan pesan lain di batch yang sama.
 
 ## Struktur Proyek
 
+Pola `modules/<module>/{entity,repository,service,routes}` — tiap module punya layer sendiri,
+dan `app/server.py` adalah **satu-satunya** tempat wiring (semua repo/service dirakit di sana).
+
 ```
 app/
-  main.py                     # FastAPI app (auto-seed SQLite saat startup)
-  scripts.py                  # entrypoint dev/start
-  core/
-    config.py                 # Settings (.env)
-    auth.py                   # verifikasi Bearer token webhook
+  main.py                       # objek FastAPI (dari server.create_app)
+  server.py                     # DI/wiring + lifespan; module baru didaftarkan di sini
+  scripts.py                    # entrypoint dev/start (pakai PORT / APP_PORT)
+  core/config.py                # Settings (.env)
   db/
-    database.py               # koneksi SQLite + schema + parse harga
-    seed.py                   # loader CSV -> SQLite (idempotent)
-    data/                     # sumber CSV (knowledge base)
-      product_aesthetic.csv
-      product_skin_health.csv
-      practice_schedule.csv
-      practice_discount.csv
-  agents/
-    base/llm.py               # factory LLM (OpenAI / Anthropic)
-    pureva/
-      graph.py                # 7 node LangGraph
-      prompts.py              # prompt tiap node
-      services.py             # query SQLite + kirim WhatsApp
-      utils.py                # format context & routing
-  api/webhooks/whatsapp.py    # endpoint webhook WhatsApp
+    base.py                     # DeclarativeBase entity Postgres
+    session.py                  # engine async + session (normalisasi URL Prisma -> asyncpg)
+  shared/
+    security.py                 # verifikasi signature Meta
+    http.py                     # httpx client seumur hidup app
+    storage.py                  # upload attachment ke Supabase Storage
+  modules/
+    health/routes.py            # /health, /health/db
+    tenant/                     # entity + repository `tenants`
+    whatsapp/                   # entity, repository, service, routes, meta_client
 ```
+
+Menambah module baru: bikin folder di `app/modules/`, lalu daftarkan di `create_app()`.
+
+## Endpoint
+
+| Method | Path | Dipanggil oleh | Auth |
+|---|---|---|---|
+| `GET` | `/health` | siapa saja | - |
+| `GET` | `/health/db` | monitoring | - |
+| `GET` | `/api/v1/webhook/whatsapp/callback` | Meta (verifikasi webhook) | `hub.verify_token` |
+| `POST` | `/api/v1/webhook/whatsapp/callback` | Meta (event pesan/status) | `X-Hub-Signature-256` |
 
 ## Setup
 
@@ -69,58 +70,58 @@ uv sync
 
 # 2. Konfigurasi environment
 cp .env.example .env
-# isi OPENAI_API_KEY dan AGENT_SECRET_KEY
+# wajib: DATABASE_URL, META_APP_SECRET, META_WEBHOOK_VERIFY_TOKEN
+# untuk attachment: SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY
 
-# 3. Seed database SQLite dari CSV
-uv run seed
-
-# 4. Jalankan server
-uv run dev          # http://localhost:8000  (reload)
+# 3. Jalankan server
+uv run dev          # http://localhost:$APP_PORT  (reload)
 # atau: uv run start
 ```
 
-> Tanpa `uv`: `pip install -e .` lalu `python -m app.db.seed` dan `python -m app.scripts` (atau `uvicorn app.main:app --reload`).
+> Tanpa `uv`: `pip install -e .` lalu `uvicorn app.main:app --reload`.
 
-## Mengetes Agent
+Port mengikuti pola yang sama dengan `ordina`: `PORT` (di-inject Railway/PaaS saat runtime)
+dengan fallback `APP_PORT` untuk lokal.
 
-Kirim pesan masuk ke webhook (header `Authorization: Bearer <AGENT_SECRET_KEY>`):
+`DATABASE_URL` boleh langsung disalin dari `pureva-ai/.env` — format Prisma
+(`?schema=public`, `?pgbouncer=true`, `?sslmode=require`) dinormalisasi otomatis ke asyncpg.
+Kalau pakai connection pooler Supabase (port 6543), prepared statement cache dimatikan sendiri.
 
-```bash
-curl -X POST http://localhost:8000/api/v1/webhook/whatsapp/message \
-  -H "Authorization: Bearer <AGENT_SECRET_KEY>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "conv_id": "demo-1",
-    "phone": "6281200000001",
-    "name": "Sarah",
-    "message": "kak jerawatku lagi parah banget, ada treatment yang cocok?"
-  }'
-```
+Cek koneksi database: `curl http://localhost:8000/health/db`.
 
-`phone` dipakai untuk tujuan pengiriman WhatsApp dan pencatatan booking. `conv_id`
-adalah kunci sesi percakapan (histori disimpan per `conv_id`).
+## Menghubungkan Webhook Meta
 
-Kalau `WHATSAPP_ACCESS_TOKEN` kosong, balasan **tidak benar-benar dikirim** ke WhatsApp —
-agent jalan mode **dry-run** dan menulis pesan ke log (`[DRY-RUN WA -> ...]`). Cocok untuk demo skripsi.
+Di Meta App Dashboard → WhatsApp → Configuration, set:
 
-Contoh pesan untuk tiap intent:
-- `skin_consult`: "ada flek hitam di pipi, mau treatment buat mencerahkan"
-- `booking`: "mau booking dong, dokter yang praktik hari sabtu siapa?"
-- `complaint`: "habis laser kemarin kulitku merah dan perih, gimana ya?"
-- `general_info`: "promo hari ini apa aja?"
+- **Callback URL**: `https://<host>/api/v1/webhook/whatsapp/callback`
+- **Verify token**: sama dengan `META_WEBHOOK_VERIFY_TOKEN`
+- **Webhook fields**: `messages` (dan `smb_message_echoes` kalau pakai coexistence)
 
-## Data Knowledge Base
+Tenant di-routing lewat `tenants.wa_phone_number_id`, jadi tiap klinik cukup didaftarkan
+nomornya di tabel `tenants` — tidak ada konfigurasi per-tenant di repo ini. Download media
+memakai `tenants.wa_access_token` milik tenant yang bersangkutan.
 
-Data CSV adalah **single source of truth**. Untuk memperbarui katalog/jadwal/promo,
-edit file di `app/db/data/`, hapus `pureva.sqlite3`, lalu `uv run seed` lagi.
-Kalau punya CSV katalog asli yang lebih lengkap, timpa `product_aesthetic.csv`
-(format kolom: `product,description,category,price_start_from`) dan seed ulang.
+Kalau `META_APP_SECRET` kosong, verifikasi signature **dilewati** (hanya untuk dev lokal).
 
 ## Catatan Desain
 
-- **Context Fetcher** sengaja deterministik (query SQLite, bukan LLM) supaya cepat & hemat.
-- **Booking Node** memakai structured output untuk ekstraksi, lalu validasi jadwal dilakukan
-  secara deterministik terhadap data dokter, baru LLM menyusun kalimat balasan.
-- **Complaint Node** menandai urgensi (`[URGENSI: TINGGI/NORMAL]`) untuk memicu eskalasi.
-- **Memory Node** tidak memakai LLM: menyimpan histori percakapan per sesi
-  (mirip peran Redis/vector store di diagram, di sini pakai tabel SQLite `conversations`).
+- **Tenant di-resolve dari `metadata.phone_number_id`**, bukan dari config — satu deployment
+  melayani semua klinik.
+- **Conversation di-upsert**, bersandar pada unique constraint `(tenant_id, phone_number)`.
+  Meta bisa mengirim beberapa event untuk kontak baru yang sama secara bersamaan, jadi
+  cek-lalu-insert tidak aman. Nama profil di-refresh, kecuali event-nya memang tidak membawa
+  nama (echo & status) — supaya nama yang sudah ada tidak tertimpa string kosong.
+- **Attachment gagal disimpan tidak membatalkan pesannya**: `storage_url` sekadar tidak ikut
+  disisipkan, teks/metadata pesannya tetap masuk.
+- **`created_at` diambil dari timestamp Meta**, bukan waktu server, supaya urutan chat di UI
+  mengikuti waktu kirim sebenarnya.
+- Bucket dan layout path Storage (`<slug>/<type>s/<ts>_<media_id>.<ext>`) sengaja sama dengan
+  yang dibaca UI `pureva-ai`.
+
+## Known Gaps
+
+- **RLS mati di semua tabel** Postgres-nya (isu lintas repo, bukan dari sini). Siapa pun dengan
+  anon key bisa baca/tulis `tenants` — termasuk kolom `wa_access_token`. Perlu pass tersendiri;
+  mengaktifkan RLS tanpa policy akan mengunci app sendiri.
+- Belum ada test suite otomatis. Verifikasi perubahan dengan `uv run ruff check app` plus
+  request manual ke server yang jalan.
