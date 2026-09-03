@@ -115,7 +115,10 @@ class LeadEvalRepository:
         if unknown:
             raise ValueError(f"kolom di luar cakupan evaluator: {sorted(unknown)}")
 
-        assignments = ", ".join(_ASSIGNMENT[c] for c in changes)
+        # Raw SQL melewati onupdate milik ORM, dan DB ini tidak punya trigger.
+        assignments = ", ".join(
+            [_ASSIGNMENT[c] for c in changes] + ["updated_at = CURRENT_TIMESTAMP"]
+        )
         row = (
             (
                 await self._session.execute(
