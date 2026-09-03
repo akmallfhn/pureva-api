@@ -57,7 +57,20 @@ Ini bagian yang paling menentukan perilaku. LLM selalu menilai keempat kolom, ta
 
 `brand_name` dan `project_value` dikunci setelah terisi supaya koreksi manusia tidak ditimpa balik oleh model. `lead_status` tidak bisa dikunci dengan aturan yang sama karena kolomnya `NOT NULL DEFAULT 'cold'` — tidak pernah "kosong" — jadi yang dipakai aturan maju-saja. `note` sengaja selalu disegarkan karena fungsinya memang ringkasan kondisi terakhir.
 
-Kebijakan ini ada di satu tempat, fungsi `diff()` di [graph.py](../../app/modules/evaluation/graph.py).
+Kebijakan ini **ditegakkan di SQL, bukan di memori**. `diff()` di [graph.py](../../app/modules/agents/lead_evaluation/graph.py) hanya menyusun usulan supaya `UPDATE` kosong bisa dilewati; yang benar-benar menjaga adalah ekspresi di [repository.py](../../app/modules/agents/lead_evaluation/repository.py):
+
+```sql
+brand_name    = COALESCE(brand_name, :brand_name)
+project_value = COALESCE(project_value, :project_value)
+lead_status   = GREATEST(lead_status, CAST(:lead_status AS wa_lead_status_enum))
+note          = :note
+```
+
+Alasannya konkurensi. Dua batch webhook untuk percakapan yang sama bisa datang hampir bersamaan, dan kalau guard-nya dievaluasi di Python, keduanya membaca state "sebelum" yang sama — evaluasi yang menang bisa jadi yang stage-nya lebih rendah, dan funnel mundur. Dengan guard di dalam satu `UPDATE`, Postgres mengunci barisnya: transaksi kedua memblok, lalu mengevaluasi ulang `COALESCE`/`GREATEST` terhadap nilai yang sudah di-commit transaksi pertama.
+
+`GREATEST` bisa dipakai karena enum Postgres diurutkan sesuai deklarasi, dan `wa_lead_status_enum` memang dideklarasikan dalam urutan funnel. Menambah stage di tengah funnel berarti harus menata ulang urutan enum-nya, bukan menambahkannya di akhir.
+
+`apply()` mengembalikan kolom yang benar-benar mendarat, bukan yang diusulkan, jadi log `updated ... held ...` menunjukkan mana yang ditahan guard.
 
 ## Konfigurasi
 

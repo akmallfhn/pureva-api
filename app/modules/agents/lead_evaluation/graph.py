@@ -20,7 +20,7 @@ Evaluator = Callable[[ConversationContext], Awaitable[LeadEvaluation]]
 
 
 def diff(ctx: ConversationContext, verdict: LeadEvaluation) -> dict[str, Any]:
-    """Kebijakan tulis: brand & nilai project sekali isi, stage hanya maju, note selalu segar."""
+    """Usulan perubahan. Penegakan sebenarnya ada di guard SQL repository."""
     changes: dict[str, Any] = {}
 
     if ctx.brand_name is None and verdict.brand_name:
@@ -77,13 +77,14 @@ def build_lead_eval_graph(*, repo: LeadEvalRepository, evaluate: Evaluator):
             return {"changes": {}}
 
         try:
-            await repo.apply(ctx.conv_id, changes)
+            applied = await repo.apply(ctx.conv_id, changes)
         except Exception as e:
             logger.exception(f"lead-eval: persist failed for {ctx.conv_id}")
             return {"changes": {}, "error": f"persist: {e}"}
 
-        logger.info(f"lead-eval: {ctx.conv_id} updated {sorted(changes)}")
-        return {"changes": changes}
+        held = sorted(set(changes) - set(applied))
+        logger.info(f"lead-eval: {ctx.conv_id} updated {sorted(applied)} held {held}")
+        return {"changes": applied}
 
     def has_context(state: EvalState) -> str:
         return "yes" if state.get("context") is not None else "no"

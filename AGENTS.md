@@ -61,7 +61,7 @@ Two Postgres details that have already cost time: enums cannot drop labels, so c
 
 ## Agents
 
-LangGraph automation agents live in `app/modules/agents/<agent_name>/`, sharing `app/modules/agents/llm.py`. Their rules — one env var, measured token ceilings, failing without taking down the flow that triggered them — are in `docs/agents/README.md`. Read that before adding one.
+LangGraph automation agents live in `app/modules/agents/<agent_name>/`, sharing `app/modules/agents/llm.py`. Their rules — one env var, measured token ceilings, write guards expressed in SQL rather than Python, and failing without taking down the flow that triggered them — are in `docs/agents/README.md`. Read that before adding one.
 
 ## Known gaps
 

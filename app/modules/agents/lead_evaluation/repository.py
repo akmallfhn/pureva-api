@@ -16,7 +16,17 @@ MAX_MESSAGE_CHARS = 500
 # Jumlah pesan terakhir yang dikirim ke LLM; percakapan lebih panjang dipotong di ujung lama.
 MAX_CHATS = 200
 
-WRITABLE_COLUMNS = ("brand_name", "project_value", "lead_status", "note")
+# Guard di SQL supaya evaluasi paralel tidak saling menimpa; GREATEST ikut urutan enum = funnel.
+_ASSIGNMENT = {
+    "brand_name": "brand_name = COALESCE(brand_name, :brand_name)",
+    "project_value": "project_value = COALESCE(project_value, :project_value)",
+    "lead_status": (
+        "lead_status = GREATEST(lead_status, CAST(:lead_status AS wa_lead_status_enum))"
+    ),
+    "note": "note = :note",
+}
+
+WRITABLE_COLUMNS = tuple(_ASSIGNMENT)
 
 _SPEAKER = {"inbound": "Pelanggan", "outbound": "Kami"}
 
@@ -96,22 +106,33 @@ class LeadEvalRepository:
             text_count=sum(1 for c in chats if (c["message"] or "").strip()),
         )
 
-    async def apply(self, conv_id: str, changes: dict[str, Any]) -> None:
+    async def apply(self, conv_id: str, changes: dict[str, Any]) -> dict[str, Any]:
+        """Terapkan usulan lewat guard SQL; kembalikan kolom yang benar-benar mendarat."""
         if not changes:
-            return
+            return {}
 
         unknown = set(changes) - set(WRITABLE_COLUMNS)
         if unknown:
             raise ValueError(f"kolom di luar cakupan evaluator: {sorted(unknown)}")
 
-        # CAST, bukan sintaks "::" — SQLAlchemy membaca ":lead_status::wa_..." sebagai bindparam.
-        assignments = ", ".join(
-            f"{c} = CAST(:{c} AS wa_lead_status_enum)" if c == "lead_status" else f"{c} = :{c}"
-            for c in changes
-        )
-
-        await self._session.execute(
-            text(f"UPDATE wa_conversations SET {assignments} WHERE id = :conv_id"),
-            {**changes, "conv_id": conv_id},
+        assignments = ", ".join(_ASSIGNMENT[c] for c in changes)
+        row = (
+            (
+                await self._session.execute(
+                    text(f"""
+                        UPDATE wa_conversations SET {assignments}
+                        WHERE id = :conv_id
+                        RETURNING brand_name, project_value,
+                                  lead_status::text AS lead_status, note
+                    """),
+                    {**changes, "conv_id": conv_id},
+                )
+            )
+            .mappings()
+            .first()
         )
         await self._session.commit()
+
+        if row is None:
+            return {}
+        return {c: v for c, v in changes.items() if row[c] == v}

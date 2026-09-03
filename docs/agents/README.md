@@ -27,6 +27,7 @@ app/modules/agents/
 - **Mati kalau tidak dikonfigurasi.** Tanpa API key, `is_configured()` mengembalikan `False` dan service berhenti di awal.
 - **Session database sendiri.** Agent jalan di session terpisah dari alur pemicunya, supaya panggilan LLM tidak menahan koneksi tulis.
 - **Batas token diukur, bukan ditebak.** Ukur keluaran terpanjang yang realistis, lalu ambil 3x lipatnya sebagai plafon.
+- **Guard tulis ada di SQL, bukan di Python.** Agent bisa jalan berkali-kali secara paralel untuk baris yang sama. Aturan seperti "sekali isi" atau "hanya boleh maju" harus jadi ekspresi di dalam `UPDATE` (`COALESCE`, `GREATEST`, atau klausa `WHERE`) supaya Postgres yang mengurutkan penulisannya. Read-modify-write di Python akan kalah balapan.
 
 ## Menambah agent baru
 
