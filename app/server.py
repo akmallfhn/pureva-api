@@ -10,6 +10,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.db.session import dispose_engine, init_engine
+from app.modules.agents.lead_evaluation.llm import evaluate_with_llm
+from app.modules.agents.lead_evaluation.repository import LeadEvalRepository
+from app.modules.agents.lead_evaluation.service import LeadEvaluationService
+from app.modules.agents.llm import is_configured
 from app.modules.health.routes import register_health_routes
 from app.modules.stat.repository import StatRepository
 from app.modules.stat.routes import register_stat_routes
@@ -43,6 +47,14 @@ def build_whatsapp_service(session: AsyncSession) -> WhatsAppWebhookService:
     )
 
 
+def build_lead_evaluation_service(session: AsyncSession) -> LeadEvaluationService:
+    return LeadEvaluationService(
+        repo=LeadEvalRepository(session),
+        evaluate=evaluate_with_llm,
+        enabled=is_configured(),
+    )
+
+
 def build_stat_service(session: AsyncSession) -> StatService:
     return StatService(stats=StatRepository(session), tenants=TenantRepository(session))
 
@@ -73,7 +85,7 @@ def create_app() -> FastAPI:
     register_health_routes(app.router)
 
     api = APIRouter(prefix="/api/v1")
-    register_whatsapp_routes(api, build_whatsapp_service)
+    register_whatsapp_routes(api, build_whatsapp_service, build_lead_evaluation_service)
     register_stat_routes(api, build_stat_service)
     app.include_router(api)
 

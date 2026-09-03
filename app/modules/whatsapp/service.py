@@ -73,7 +73,10 @@ class WhatsAppWebhookService:
         self._media = media
         self._storage = storage
 
-    async def process(self, payload: WAWebhookBody) -> None:
+    async def process(self, payload: WAWebhookBody) -> set[str]:
+        """Kembalikan id percakapan yang dapat pesan baru, untuk dinilai evaluator sesudah ini."""
+        touched: set[str] = set()
+
         for entry in payload.entry:
             for change in entry.changes:
                 if change.field not in HANDLED_FIELDS:
@@ -96,19 +99,23 @@ class WhatsAppWebhookService:
                     continue
 
                 if change.field == "smb_message_echoes":
-                    await self._handle_echoes(tenant, value)
+                    touched |= await self._handle_echoes(tenant, value)
                 else:
-                    await self._handle_messages(tenant, phone_number_id, value)
+                    touched |= await self._handle_messages(tenant, phone_number_id, value)
 
+                # Status delivery tidak menambah isi percakapan, jadi tidak memicu evaluasi.
                 await self._handle_statuses(tenant, value)
+
+        return touched
 
     # --- Pesan masuk dari pelanggan ----------------------------------------------
     async def _handle_messages(
         self, tenant: Tenant, phone_number_id: str, value: dict[str, Any]
-    ) -> None:
+    ) -> set[str]:
+        touched: set[str] = set()
         messages = value.get("messages") or []
         if not messages:
-            return
+            return touched
 
         contacts = value.get("contacts") or []
         full_name = contacts[0].get("profile", {}).get("name", "") if contacts else ""
@@ -130,7 +137,7 @@ class WhatsAppWebhookService:
 
             wam_id = msg.get("id", "")
             try:
-                await self._append_inbound_chat(
+                conv_id = await self._append_inbound_chat(
                     tenant_id=tenant.id,
                     full_name=full_name,
                     phone_number=msg.get("from", ""),
@@ -142,9 +149,12 @@ class WhatsAppWebhookService:
                     context_wam_id=(msg.get("context") or {}).get("id"),
                 )
                 await self._session.commit()
+                touched.add(conv_id)
             except Exception:
                 await self._session.rollback()
                 logger.exception(f"wa-meta webhook: failed to store wam_id={wam_id}")
+
+        return touched
 
     async def _append_inbound_chat(
         self,
@@ -158,7 +168,7 @@ class WhatsAppWebhookService:
         attachment: Any | None,
         sent_at_unix: Any,
         context_wam_id: str | None,
-    ) -> None:
+    ) -> str:
         conv = await self._conversations.find_or_create(
             tenant_id=tenant_id, full_name=full_name, phone_number=phone_number
         )
@@ -179,9 +189,12 @@ class WhatsAppWebhookService:
             reply_to_id=reply_to_id,
             created_at=unix_to_datetime(sent_at_unix),
         )
+        return conv.id
 
     # --- Echo pesan yang dikirim staff dari WhatsApp Business App (coexistence) ---
-    async def _handle_echoes(self, tenant: Tenant, value: dict[str, Any]) -> None:
+    async def _handle_echoes(self, tenant: Tenant, value: dict[str, Any]) -> set[str]:
+        touched: set[str] = set()
+
         for echo in value.get("message_echoes") or []:
             msg_type = echo.get("type")
             if msg_type not in SUPPORTED_MESSAGE_TYPES:
@@ -204,9 +217,12 @@ class WhatsAppWebhookService:
                     created_at=unix_to_datetime(echo.get("timestamp")),
                 )
                 await self._session.commit()
+                touched.add(conv.id)
             except Exception:
                 await self._session.rollback()
                 logger.exception(f"wa-meta webhook: failed to store echo {wam_id}")
+
+        return touched
 
     # --- Status delivery pesan keluar ---------------------------------------------
     async def _handle_statuses(self, tenant: Tenant, value: dict[str, Any]) -> None:

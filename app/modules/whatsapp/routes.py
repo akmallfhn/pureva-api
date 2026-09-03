@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Callable
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, Response
@@ -6,20 +7,34 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.db.session import session_scope
+from app.modules.agents.lead_evaluation.service import LeadEvaluationService
 from app.modules.whatsapp.schema import WAWebhookBody
 from app.modules.whatsapp.service import WhatsAppWebhookService
 from app.shared.security import verify_meta_signature
 
+logger = logging.getLogger(__name__)
+
 ServiceFactory = Callable[[AsyncSession], WhatsAppWebhookService]
+EvaluatorFactory = Callable[[AsyncSession], LeadEvaluationService]
 
 
-def register_whatsapp_routes(rg: APIRouter, build_service: ServiceFactory) -> None:
+def register_whatsapp_routes(
+    rg: APIRouter, build_service: ServiceFactory, build_evaluator: EvaluatorFactory
+) -> None:
     router = APIRouter(prefix="/webhook/whatsapp", tags=["webhook:whatsapp-meta"])
 
     async def process(payload: WAWebhookBody) -> None:
         # Session sendiri: session milik request sudah ditutup waktu background task jalan.
         async with session_scope() as session:
-            await build_service(session).process(payload)
+            conv_ids = await build_service(session).process(payload)
+
+        # Evaluasi di session terpisah supaya panggilan LLM tidak menahan koneksi tulis.
+        for conv_id in conv_ids:
+            try:
+                async with session_scope() as session:
+                    await build_evaluator(session).evaluate(conv_id)
+            except Exception:
+                logger.exception(f"lead-eval: unhandled failure for {conv_id}")
 
     @router.get("/callback")
     async def verify_webhook(

@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     # Zona waktu default untuk bucket harian & heatmap statistik.
     stat_timezone: str = "Asia/Jakarta"
 
+    # Agent automation (LangGraph). Model & batasnya konstanta di app/modules/agents.
+    openai_api_key: str = ""
+
     # Supabase Storage untuk attachment WhatsApp; bucket sama dengan yang dibaca UI pureva-ai.
     supabase_url: str = ""
     supabase_service_role_key: str = ""
