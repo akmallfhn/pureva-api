@@ -5,8 +5,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_session
 from app.modules.stat.schema import (
+    BrandListRequest,
     ListRequest,
-    NeedsActionRequest,
     ResponseTimeRequest,
     StatRequest,
     SummaryRequest,
@@ -57,9 +57,7 @@ def register_stat_routes(rg: APIRouter, build_service: ServiceFactory) -> None:
         )
 
     @router.post("/needs-action/list")
-    async def needs_action(
-        req: NeedsActionRequest, svc: StatService = Depends(service)
-    ) -> Response:
+    async def needs_action(req: BrandListRequest, svc: StatService = Depends(service)) -> Response:
         return success(
             200, "needs action conversations retrieved successfully", await svc.needs_action(req)
         )

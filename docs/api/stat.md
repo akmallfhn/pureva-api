@@ -1,6 +1,6 @@
 # Stat
 
-Read-only aggregate endpoints untuk dashboard evaluasi 360° WhatsApp brand deals: volume percakapan harian, first response time (median/p90), heatmap jam inbound, funnel lead status beserta nilai project, daftar chat tanpa balasan, dan daftar percakapan yang butuh aksi.
+Read-only aggregate endpoints untuk dashboard evaluasi 360° WhatsApp brand deals: volume percakapan harian, first response time (median/p90), heatmap jam inbound, funnel lead status beserta nilai project, daftar chat tanpa balasan, dan daftar brand deal yang sedang berjalan.
 
 Semua angka dihitung langsung dari `wa_conversations` + `wa_chats` dan di-scope per tenant lewat `tenant_id` — tidak ada laporan manual dan tidak ada tabel agregat terpisah. Semua endpoint memakai `POST`, diautentikasi dengan Bearer token statis dari environment `CLIENT_SECRET`.
 
@@ -475,7 +475,7 @@ Mengembalikan daftar percakapan yang punya pesan masuk tanpa balasan sama sekali
 
 ### `POST {base_url}/api/v1/stats/needs-action/list`
 
-Mengembalikan daftar percakapan yang pesan terakhirnya dari pelanggan dan sudah diam lebih lama dari `idle_hours` — isi tabel "butuh aksi sekarang".
+Mengembalikan seluruh percakapan yang `brand_name`-nya sudah terisi — daftar brand deal yang sedang berjalan, diurutkan dari yang paling lama tidak ada aktivitas.
 
 **Method:** `POST`
 
@@ -486,9 +486,6 @@ Mengembalikan daftar percakapan yang pesan terakhirnya dari pelanggan dan sudah 
 ```json
 {
   "tenant_id": "8yuPA4qUjqC3OfizucQoH",
-  "start_date": "2026-08-04",
-  "end_date": "2026-09-02",
-  "idle_hours": 48,
   "page": 1,
   "page_size": 20
 }
@@ -497,10 +494,6 @@ Mengembalikan daftar percakapan yang pesan terakhirnya dari pelanggan dan sudah 
 | Field | Type | Required |
 |---|---|---|
 | `tenant_id` | string | yes |
-| `start_date` | string (`YYYY-MM-DD`) | no |
-| `end_date` | string (`YYYY-MM-DD`) | no |
-| `timezone` | string (IANA) | no |
-| `idle_hours` | integer (1–8760) | no |
 | `page` | integer | no |
 | `page_size` | integer | no |
 
@@ -513,10 +506,6 @@ Mengembalikan daftar percakapan yang pesan terakhirnya dari pelanggan dan sudah 
   "status": "OK",
   "message": "needs action conversations retrieved successfully",
   "data": {
-    "start_date": "2026-08-04",
-    "end_date": "2026-09-02",
-    "timezone": "Asia/Jakarta",
-    "idle_hours": 48,
     "list": [
       {
         "conv_id": "CSzBhHYZH2h61r5eXoe6n",
@@ -526,16 +515,17 @@ Mengembalikan daftar percakapan yang pesan terakhirnya dari pelanggan dan sudah 
         "lead_status": "negotiation",
         "project_value": 75000000,
         "winning_rate": 0,
-        "mode": "ai",
+        "mode": "human",
         "note": "Nego turun dari rate card, menunggu keputusan internal brand.",
         "last_message_at": "2026-09-02T10:00:08+00:00",
+        "last_message_direction": "inbound",
         "last_message_type": "text",
         "last_message_preview": "Belum kaak, aku habis flight nih",
         "idle_hours": 5
       }
     ],
     "metapaging": {
-      "total_data": 3,
+      "total_data": 7,
       "total_page": 1,
       "current_page": 1,
       "page_size": 20
@@ -544,15 +534,17 @@ Mengembalikan daftar percakapan yang pesan terakhirnya dari pelanggan dan sudah 
 }
 ```
 
-`idle_hours` default `48`, mengikuti ambang "lead idle" pada dokumen evaluasi. `last_message_preview` dipotong 120 karakter pertama. `brand_name`, `project_value`, dan `note` boleh `null` kalau belum diisi; `note` dikembalikan utuh tanpa dipotong.
+Endpoint ini tidak menerima `start_date`/`end_date`/`timezone`: daftarnya adalah semua brand deal milik tenant, bukan potongan periode. Percakapan tanpa `brand_name` — thread uji coba, koordinasi internal, atau inbound yang belum teridentifikasi brand-nya — tidak ikut dikembalikan.
+
+`last_message_at`, `last_message_direction`, `last_message_type`, `last_message_preview`, dan `idle_hours` dihitung dari pesan terakhir di seluruh riwayat percakapan, bukan hanya periode tertentu, sehingga deal lama tetap terbaca. `last_message_direction` bernilai `inbound` kalau bola ada di kita dan `outbound` kalau kita sedang menunggu brand. `idle_hours` dibulatkan ke jam terdekat, jadi aktivitas di bawah 30 menit terakhir tampil sebagai `0`. `last_message_preview` dipotong 120 karakter pertama, sedangkan `note` dikembalikan utuh.
 
 **Errors**
 
 | Code | Status | Message | When |
 |---|---|---|---|
 | 401 | `UNAUTHORIZED` | `missing or invalid authorization header` | header authorization hilang/salah |
-| 400 | `BAD_REQUEST` | `invalid request: idle_hours` | `idle_hours` di luar rentang 1–8760 |
-| 400 | `BAD_REQUEST` | `start_date must be on or before end_date` | rentang tanggal terbalik |
+| 400 | `BAD_REQUEST` | `invalid request: page` | `page` kurang dari 1 |
+| 400 | `BAD_REQUEST` | `tenant_id is required` | `tenant_id` dikirim kosong |
 | 404 | `NOT_FOUND` | `tenant not found` | `tenant_id` tidak ada di tabel tenants |
 | 500 | `INTERNAL_SERVER_ERROR` | `an unexpected error occurred` | kegagalan DB atau `CLIENT_SECRET` belum di-set |
 

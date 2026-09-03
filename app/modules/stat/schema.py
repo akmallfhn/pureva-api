@@ -26,6 +26,9 @@ class ListRequest(StatRequest):
     page_size: int = Field(default=20, ge=1)
 
 
-class NeedsActionRequest(ListRequest):
-    # Ambang "lead idle" dari dokumen evaluasi: 48 jam.
-    idle_hours: int = Field(default=48, ge=1, le=8_760)
+class BrandListRequest(BaseModel):
+    """Daftar brand deal: tidak difilter rentang tanggal, cukup tenant dan paging."""
+
+    tenant_id: str
+    page: int = Field(default=1, ge=1)
+    page_size: int = Field(default=20, ge=1)

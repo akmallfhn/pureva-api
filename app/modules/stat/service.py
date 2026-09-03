@@ -7,8 +7,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from app.core.config import settings
 from app.modules.stat.repository import StatRepository
 from app.modules.stat.schema import (
+    BrandListRequest,
     ListRequest,
-    NeedsActionRequest,
     ResponseTimeRequest,
     StatRequest,
     SummaryRequest,
@@ -26,14 +26,16 @@ class StatService:
         self._stats = stats
         self._tenants = tenants
 
+    async def _tenant(self, tenant_id: str) -> str:
+        if not tenant_id.strip():
+            raise ApiError(400, "tenant_id is required")
+        if await self._tenants.find_by_id(tenant_id) is None:
+            raise ApiError(404, "tenant not found")
+        return tenant_id
+
     async def _scope(self, req: StatRequest) -> tuple[str, datetime, datetime, str]:
         """Validasi tenant + rentang tanggal, lalu ubah tanggal lokal jadi batas timestamptz."""
-        if not req.tenant_id.strip():
-            raise ApiError(400, "tenant_id is required")
-
-        tenant = await self._tenants.find_by_id(req.tenant_id)
-        if tenant is None:
-            raise ApiError(404, "tenant not found")
+        await self._tenant(req.tenant_id)
 
         tz_name = req.timezone or settings.stat_timezone
         try:
@@ -165,24 +167,17 @@ class StatService:
             "metapaging": pagination.meta(total, page, page_size),
         }
 
-    async def needs_action(self, req: NeedsActionRequest) -> dict[str, Any]:
-        tenant_id, start_at, end_at, tz_name = await self._scope(req)
+    async def needs_action(self, req: BrandListRequest) -> dict[str, Any]:
+        tenant_id = await self._tenant(req.tenant_id)
         page, page_size = pagination.normalize(req.page, req.page_size)
 
-        total = await self._stats.count_needs_action(
-            tenant_id=tenant_id, start_at=start_at, end_at=end_at, idle_hours=req.idle_hours
-        )
+        total = await self._stats.count_needs_action(tenant_id=tenant_id)
         rows = await self._stats.needs_action(
             tenant_id=tenant_id,
-            start_at=start_at,
-            end_at=end_at,
-            idle_hours=req.idle_hours,
             limit=page_size,
             skip=pagination.offset(page, page_size),
         )
         return {
-            **self._period(start_at, end_at, tz_name),
-            "idle_hours": req.idle_hours,
             "list": [_isoformat_times(r) for r in rows],
             "metapaging": pagination.meta(total, page, page_size),
         }

@@ -37,7 +37,7 @@ TURNS_CTE = """
     )
 """
 
-# Pesan terakhir tiap percakapan yang aktivitas terakhirnya jatuh di rentang yang diminta.
+# Pesan terakhir tiap percakapan, dilihat dari seluruh riwayat supaya deal lama tetap terbaca.
 _LAST_MESSAGE_CTE = """
     last_message AS (
         SELECT DISTINCT ON (c.conv_id)
@@ -45,7 +45,6 @@ _LAST_MESSAGE_CTE = """
         FROM wa_chats c
         JOIN wa_conversations v ON v.id = c.conv_id
         WHERE v.tenant_id = :tenant_id
-          AND c.created_at >= :start_at AND c.created_at < :end_at
         ORDER BY c.conv_id, c.created_at DESC, c.id DESC
     )
 """
@@ -292,16 +291,8 @@ class StatRepository:
         )
         return int(result.scalar_one())
 
-    async def needs_action(
-        self,
-        *,
-        tenant_id: str,
-        start_at: datetime,
-        end_at: datetime,
-        idle_hours: int,
-        limit: int,
-        skip: int,
-    ) -> list[dict[str, Any]]:
+    async def needs_action(self, *, tenant_id: str, limit: int, skip: int) -> list[dict[str, Any]]:
+        # Semua percakapan yang brand_name-nya terisi, paling lama tidak ada aktivitas di atas.
         stmt = text(f"""
             WITH {_LAST_MESSAGE_CTE}
             SELECT
@@ -315,45 +306,26 @@ class StatRepository:
                 v.mode,
                 v.note,
                 lm.created_at AS last_message_at,
+                lm.direction AS last_message_direction,
                 lm.type AS last_message_type,
                 LEFT(lm.message, 120) AS last_message_preview,
                 ROUND(EXTRACT(EPOCH FROM (NOW() - lm.created_at)) / 3600)::int AS idle_hours
-            FROM last_message lm
-            JOIN wa_conversations v ON v.id = lm.conv_id
-            WHERE lm.direction = 'inbound'
-              AND lm.created_at < NOW() - make_interval(hours => :idle_hours)
+            FROM wa_conversations v
+            LEFT JOIN last_message lm ON lm.conv_id = v.id
+            WHERE v.tenant_id = :tenant_id
+              AND v.brand_name IS NOT NULL
             ORDER BY lm.created_at
             LIMIT :limit OFFSET :skip
         """)
         result = await self._session.execute(
-            stmt,
-            {
-                "tenant_id": tenant_id,
-                "start_at": start_at,
-                "end_at": end_at,
-                "idle_hours": idle_hours,
-                "limit": limit,
-                "skip": skip,
-            },
+            stmt, {"tenant_id": tenant_id, "limit": limit, "skip": skip}
         )
         return _rows(result)
 
-    async def count_needs_action(
-        self, *, tenant_id: str, start_at: datetime, end_at: datetime, idle_hours: int
-    ) -> int:
-        stmt = text(f"""
-            WITH {_LAST_MESSAGE_CTE}
-            SELECT COUNT(*) FROM last_message
-            WHERE direction = 'inbound'
-              AND created_at < NOW() - make_interval(hours => :idle_hours)
+    async def count_needs_action(self, *, tenant_id: str) -> int:
+        stmt = text("""
+            SELECT COUNT(*) FROM wa_conversations
+            WHERE tenant_id = :tenant_id AND brand_name IS NOT NULL
         """)
-        result = await self._session.execute(
-            stmt,
-            {
-                "tenant_id": tenant_id,
-                "start_at": start_at,
-                "end_at": end_at,
-                "idle_hours": idle_hours,
-            },
-        )
+        result = await self._session.execute(stmt, {"tenant_id": tenant_id})
         return int(result.scalar_one())
