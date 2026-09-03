@@ -214,18 +214,29 @@ class StatRepository:
     async def lead_status(
         self, *, tenant_id: str, start_at: datetime, end_at: datetime
     ) -> list[dict[str, Any]]:
+        # Stage tanpa percakapan tetap dikembalikan (hitungan nol) supaya funnel tidak bolong.
         stmt = text("""
+            WITH stages AS (
+                SELECT unnest(enum_range(NULL::wa_lead_status_enum)) AS lead_status
+            ),
+            convs AS (
+                SELECT lead_status, mode, winning_rate, project_value
+                FROM wa_conversations
+                WHERE tenant_id = :tenant_id
+                  AND created_at >= :start_at AND created_at < :end_at
+            )
             SELECT
-                lead_status,
-                COUNT(*) AS conversation_count,
-                COUNT(*) FILTER (WHERE mode = 'ai') AS mode_ai_count,
-                COUNT(*) FILTER (WHERE mode = 'human') AS mode_human_count,
-                ROUND(AVG(winning_rate))::int AS avg_winning_rate
-            FROM wa_conversations
-            WHERE tenant_id = :tenant_id
-              AND created_at >= :start_at AND created_at < :end_at
-            GROUP BY lead_status
-            ORDER BY lead_status
+                s.lead_status,
+                COUNT(c.lead_status) AS conversation_count,
+                COUNT(*) FILTER (WHERE c.mode = 'ai') AS mode_ai_count,
+                COUNT(*) FILTER (WHERE c.mode = 'human') AS mode_human_count,
+                COALESCE(ROUND(AVG(c.winning_rate))::int, 0) AS avg_winning_rate,
+                COUNT(c.project_value) AS valued_conversation_count,
+                COALESCE(SUM(c.project_value), 0)::bigint AS total_project_value
+            FROM stages s
+            LEFT JOIN convs c ON c.lead_status = s.lead_status
+            GROUP BY s.lead_status
+            ORDER BY s.lead_status
         """)
         result = await self._session.execute(
             stmt, {"tenant_id": tenant_id, "start_at": start_at, "end_at": end_at}
@@ -241,7 +252,10 @@ class StatRepository:
                 v.id AS conv_id,
                 v.full_name,
                 v.phone_number,
+                v.brand_name,
                 v.lead_status,
+                v.project_value,
+                v.note,
                 COUNT(*) AS unanswered_turn_count,
                 MIN(r.inbound_at) AS first_unanswered_at,
                 MAX(r.inbound_at) AS last_unanswered_at,
@@ -249,7 +263,8 @@ class StatRepository:
             FROM resolved r
             JOIN wa_conversations v ON v.id = r.conv_id
             WHERE r.replied_at IS NULL
-            GROUP BY v.id, v.full_name, v.phone_number, v.lead_status
+            GROUP BY v.id, v.full_name, v.phone_number, v.brand_name,
+                     v.lead_status, v.project_value, v.note
             ORDER BY MIN(r.inbound_at)
             LIMIT :limit OFFSET :skip
         """)
@@ -293,9 +308,12 @@ class StatRepository:
                 v.id AS conv_id,
                 v.full_name,
                 v.phone_number,
+                v.brand_name,
                 v.lead_status,
+                v.project_value,
                 v.winning_rate,
                 v.mode,
+                v.note,
                 lm.created_at AS last_message_at,
                 lm.type AS last_message_type,
                 LEFT(lm.message, 120) AS last_message_preview,

@@ -141,6 +141,7 @@ class StatService:
         return {
             **self._period(start_at, end_at, tz_name),
             "total_conversation_count": sum(r["conversation_count"] for r in rows),
+            "total_project_value": sum(r["total_project_value"] for r in rows),
             "list": rows,
         }
 

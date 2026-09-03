@@ -1,6 +1,6 @@
 # Stat
 
-Read-only aggregate endpoints untuk dashboard evaluasi 360° WhatsApp brand deals: volume percakapan harian, first response time (median/p90), heatmap jam inbound, distribusi lead status, daftar chat tanpa balasan, dan daftar percakapan yang butuh aksi.
+Read-only aggregate endpoints untuk dashboard evaluasi 360° WhatsApp brand deals: volume percakapan harian, first response time (median/p90), heatmap jam inbound, funnel lead status beserta nilai project, daftar chat tanpa balasan, dan daftar percakapan yang butuh aksi.
 
 Semua angka dihitung langsung dari `wa_conversations` + `wa_chats` dan di-scope per tenant lewat `tenant_id` — tidak ada laporan manual dan tidak ada tabel agregat terpisah. Semua endpoint memakai `POST`, diautentikasi dengan Bearer token statis dari environment `CLIENT_SECRET`.
 
@@ -292,7 +292,7 @@ Mengembalikan sebaran pesan masuk per kombinasi hari dalam minggu dan jam, untuk
 
 ### `POST {base_url}/api/v1/stats/lead-status`
 
-Mengembalikan distribusi percakapan per `lead_status`, beserta pembagian mode AI/human dan rata-rata winning rate.
+Mengembalikan funnel percakapan per `lead_status`, beserta pembagian mode AI/human, rata-rata winning rate, dan nilai project yang tertahan di tiap stage.
 
 **Method:** `POST`
 
@@ -328,20 +328,63 @@ Mengembalikan distribusi percakapan per `lead_status`, beserta pembagian mode AI
     "end_date": "2026-09-02",
     "timezone": "Asia/Jakarta",
     "total_conversation_count": 11,
+    "total_project_value": 185000000,
     "list": [
       {
         "lead_status": "cold",
-        "conversation_count": 11,
-        "mode_ai_count": 11,
+        "conversation_count": 5,
+        "mode_ai_count": 5,
         "mode_human_count": 0,
-        "avg_winning_rate": 0
+        "avg_winning_rate": 8,
+        "valued_conversation_count": 0,
+        "total_project_value": 0
+      },
+      {
+        "lead_status": "qualified",
+        "conversation_count": 3,
+        "mode_ai_count": 2,
+        "mode_human_count": 1,
+        "avg_winning_rate": 35,
+        "valued_conversation_count": 2,
+        "total_project_value": 45000000
+      },
+      {
+        "lead_status": "rate_card_sent",
+        "conversation_count": 2,
+        "mode_ai_count": 0,
+        "mode_human_count": 2,
+        "avg_winning_rate": 60,
+        "valued_conversation_count": 2,
+        "total_project_value": 65000000
+      },
+      {
+        "lead_status": "negotiation",
+        "conversation_count": 1,
+        "mode_ai_count": 0,
+        "mode_human_count": 1,
+        "avg_winning_rate": 80,
+        "valued_conversation_count": 1,
+        "total_project_value": 75000000
+      },
+      {
+        "lead_status": "closed",
+        "conversation_count": 0,
+        "mode_ai_count": 0,
+        "mode_human_count": 0,
+        "avg_winning_rate": 0,
+        "valued_conversation_count": 0,
+        "total_project_value": 0
       }
     ]
   }
 }
 ```
 
-Rentang tanggal difilter pada `wa_conversations.created_at`, bukan pada aktivitas chat. `lead_status` bernilai `cold`, `warm`, atau `hot`.
+Rentang tanggal difilter pada `wa_conversations.created_at`, bukan pada aktivitas chat.
+
+`lead_status` adalah stage funnel dan selalu dikembalikan lengkap dalam urutan `cold` → `qualified` → `rate_card_sent` → `negotiation` → `closed`. Stage tanpa percakapan tetap muncul dengan hitungan `0` supaya funnel tidak bolong.
+
+`project_value` adalah nilai project per percakapan dalam Rupiah penuh (tanpa desimal) dan boleh `null` selama belum ditentukan. `valued_conversation_count` menghitung percakapan yang `project_value`-nya sudah terisi, jadi `total_project_value` bisa dibaca sebagai nilai yang tertahan di stage tersebut — bukan estimasi seluruh percakapan di stage itu.
 
 **Errors**
 
@@ -398,7 +441,10 @@ Mengembalikan daftar percakapan yang punya pesan masuk tanpa balasan sama sekali
         "conv_id": "CSzBhHYZH2h61r5eXoe6n",
         "full_name": "Vicky - Sands Bosum Indonesia",
         "phone_number": "6282213950021",
-        "lead_status": "cold",
+        "brand_name": "Sands Bosum Indonesia",
+        "lead_status": "rate_card_sent",
+        "project_value": 35000000,
+        "note": "Rate card sudah dikirim, brand minta waktu untuk review internal.",
         "unanswered_turn_count": 1,
         "first_unanswered_at": "2026-09-02T10:00:08+00:00",
         "last_unanswered_at": "2026-09-02T10:00:08+00:00",
@@ -415,7 +461,7 @@ Mengembalikan daftar percakapan yang punya pesan masuk tanpa balasan sama sekali
 }
 ```
 
-`page` default `1`, `page_size` default `20` dan dibatasi maksimum `100`. `waiting_hours` dihitung dari `first_unanswered_at` sampai sekarang.
+`page` default `1`, `page_size` default `20` dan dibatasi maksimum `100`. `waiting_hours` dihitung dari `first_unanswered_at` sampai sekarang. `brand_name`, `project_value`, dan `note` boleh `null` kalau belum diisi — dipakai untuk memperkirakan nilai yang berisiko hilang dari chat yang menggantung, dan `note` memberi konteks terakhir tanpa perlu membuka thread-nya.
 
 **Errors**
 
@@ -476,9 +522,12 @@ Mengembalikan daftar percakapan yang pesan terakhirnya dari pelanggan dan sudah 
         "conv_id": "CSzBhHYZH2h61r5eXoe6n",
         "full_name": "Vicky - Sands Bosum Indonesia",
         "phone_number": "6282213950021",
-        "lead_status": "cold",
+        "brand_name": "Sands Bosum Indonesia",
+        "lead_status": "negotiation",
+        "project_value": 75000000,
         "winning_rate": 0,
         "mode": "ai",
+        "note": "Nego turun dari rate card, menunggu keputusan internal brand.",
         "last_message_at": "2026-09-02T10:00:08+00:00",
         "last_message_type": "text",
         "last_message_preview": "Belum kaak, aku habis flight nih",
@@ -495,7 +544,7 @@ Mengembalikan daftar percakapan yang pesan terakhirnya dari pelanggan dan sudah 
 }
 ```
 
-`idle_hours` default `48`, mengikuti ambang "lead idle" pada dokumen evaluasi. `last_message_preview` dipotong 120 karakter pertama.
+`idle_hours` default `48`, mengikuti ambang "lead idle" pada dokumen evaluasi. `last_message_preview` dipotong 120 karakter pertama. `brand_name`, `project_value`, dan `note` boleh `null` kalau belum diisi; `note` dikembalikan utuh tanpa dipotong.
 
 **Errors**
 
@@ -509,11 +558,11 @@ Mengembalikan daftar percakapan yang pesan terakhirnya dari pelanggan dan sudah 
 
 ## Metrik yang belum bisa dilayani
 
-Empat elemen dashboard pada dokumen evaluasi tidak punya sumber data di schema saat ini dan belum dibuatkan endpoint. Semuanya butuh penambahan kolom/tabel di schema Prisma milik `pureva-ai` lebih dulu.
+Dua elemen dashboard pada dokumen evaluasi masih belum punya sumber data di schema dan belum dibuatkan endpoint. Keduanya butuh penambahan kolom di schema Prisma milik `pureva-ai` lebih dulu.
 
 | Elemen dashboard | Yang dibutuhkan |
 |---|---|
-| Funnel `Inbound → Qualified → Rate card → Nego → Closed` | Tabel label/stage per percakapan; saat ini hanya ada `lead_status` (cold/warm/hot) |
-| Estimasi leakage (Rp) | Nilai deal per percakapan (`deal_value`) + stage closed |
 | Lost reason | Kolom alasan saat percakapan ditutup |
 | Cycle time inbound → closed | Timestamp saat stage closed tercapai |
+
+Funnel `Inbound → Qualified → Rate card → Nego → Closed` sudah dilayani `POST /stats/lead-status` sejak `wa_lead_status_enum` memakai stage `cold` → `qualified` → `rate_card_sent` → `negotiation` → `closed`. Estimasi leakage (Rp) bisa dirakit dari `total_project_value` per stage pada endpoint yang sama, digabung dengan `project_value` pada `POST /stats/unanswered/list` dan `POST /stats/needs-action/list`.
