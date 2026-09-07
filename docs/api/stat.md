@@ -233,7 +233,7 @@ Hari tanpa pesan masuk tetap dikembalikan dengan median dan p90 `null`, supaya g
 
 ### `POST {base_url}/api/v1/stats/inbound-heatmap`
 
-Mengembalikan sebaran pesan masuk per kombinasi hari dalam minggu dan jam, untuk heatmap kapan inbound datang.
+Mengembalikan sebaran pesan masuk dan pesan keluar per kombinasi hari dalam minggu dan jam, untuk heatmap kapan inbound datang dan kapan dibalas.
 
 **Method:** `POST`
 
@@ -269,16 +269,29 @@ Mengembalikan sebaran pesan masuk per kombinasi hari dalam minggu dan jam, untuk
     "start_date": "2026-08-04",
     "end_date": "2026-09-02",
     "timezone": "Asia/Jakarta",
-    "total_message_count": 39,
+    "total_inbound_message_count": 39,
+    "total_outbound_message_count": 27,
     "list": [
-      { "day_of_week": 3, "hour": 17, "message_count": 10, "conversation_count": 4 },
-      { "day_of_week": 3, "hour": 18, "message_count": 11, "conversation_count": 4 }
+      {
+        "day_of_week": 3,
+        "hour": 17,
+        "inbound_message_count": 10,
+        "outbound_message_count": 6,
+        "conversation_count": 4
+      },
+      {
+        "day_of_week": 3,
+        "hour": 18,
+        "inbound_message_count": 11,
+        "outbound_message_count": 9,
+        "conversation_count": 4
+      }
     ]
   }
 }
 ```
 
-`day_of_week` memakai ISO: `1` = Senin sampai `7` = Minggu. `hour` bernilai `0`–`23` pada zona waktu yang diminta. Kombinasi tanpa pesan masuk tidak dikembalikan — klien mengisi sisanya dengan nol.
+`day_of_week` memakai ISO: `1` = Senin sampai `7` = Minggu. `hour` bernilai `0`–`23` pada zona waktu yang diminta. `conversation_count` menghitung percakapan berbeda yang mengirim pesan masuk pada bucket itu. Kombinasi tanpa pesan masuk maupun pesan keluar tidak dikembalikan — klien mengisi sisanya dengan nol.
 
 **Errors**
 

@@ -191,16 +191,18 @@ class StatRepository:
     async def inbound_heatmap(
         self, *, tenant_id: str, start_at: datetime, end_at: datetime, tz: str
     ) -> list[dict[str, Any]]:
+        # Satu bucket memuat pesan masuk dan keluar sekaligus, jadi jam yang sama sebanding.
         stmt = text("""
             SELECT
                 EXTRACT(ISODOW FROM c.created_at AT TIME ZONE :tz)::int AS day_of_week,
                 EXTRACT(HOUR FROM c.created_at AT TIME ZONE :tz)::int AS hour,
-                COUNT(*) AS message_count,
-                COUNT(DISTINCT c.conv_id) AS conversation_count
+                COUNT(*) FILTER (WHERE c.direction = 'inbound') AS inbound_message_count,
+                COUNT(*) FILTER (WHERE c.direction = 'outbound') AS outbound_message_count,
+                COUNT(DISTINCT c.conv_id) FILTER (WHERE c.direction = 'inbound')
+                    AS conversation_count
             FROM wa_chats c
             JOIN wa_conversations v ON v.id = c.conv_id
             WHERE v.tenant_id = :tenant_id
-              AND c.direction = 'inbound'
               AND c.created_at >= :start_at AND c.created_at < :end_at
             GROUP BY 1, 2
             ORDER BY 1, 2

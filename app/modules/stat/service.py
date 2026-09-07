@@ -133,7 +133,8 @@ class StatService:
         )
         return {
             **self._period(start_at, end_at, tz_name),
-            "total_message_count": sum(r["message_count"] for r in rows),
+            "total_inbound_message_count": sum(r["inbound_message_count"] for r in rows),
+            "total_outbound_message_count": sum(r["outbound_message_count"] for r in rows),
             "list": rows,
         }
 
