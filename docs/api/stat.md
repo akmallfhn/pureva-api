@@ -4,6 +4,8 @@ Read-only aggregate endpoints untuk dashboard evaluasi 360° WhatsApp brand deal
 
 Semua angka dihitung langsung dari `wa_conversations` + `wa_chats` dan di-scope per tenant lewat `tenant_id` — tidak ada laporan manual dan tidak ada tabel agregat terpisah. Semua endpoint memakai `POST`, diautentikasi dengan Bearer token statis dari environment `CLIENT_SECRET`.
 
+Percakapan dengan `wa_conversations.is_internal = true` — kontak tim sendiri — dibuang dari **seluruh** endpoint di halaman ini: tidak masuk hitungan volume, response time, heatmap, funnel, maupun kedua daftar. Flag ini di-set dari sisi CRM, bukan lewat API ini, dan defaultnya `false`.
+
 Setiap request menerima `start_date`/`end_date` (inklusif, format `YYYY-MM-DD`) dan `timezone` (nama IANA, default `Asia/Jakarta`). Bucket harian dan heatmap dihitung pada zona waktu tersebut, bukan UTC. Jika `start_date`/`end_date` dikosongkan, rentang default adalah 30 hari terakhir sampai hari ini; rentang maksimum 366 hari.
 
 Definisi **turn**: satu pesan masuk yang membuka giliran balas, yaitu inbound pertama setelah outbound terakhir. Beberapa pesan inbound beruntun tanpa balasan dihitung sebagai satu turn. **First response time** = selisih waktu turn tersebut ke pesan outbound pertama sesudahnya; turn tanpa outbound sesudahnya dihitung sebagai *unanswered*.

@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import CHAR, BigInteger, ForeignKey, SmallInteger, String, text
+from sqlalchemy import CHAR, BigInteger, Boolean, ForeignKey, SmallInteger, String, text
 from sqlalchemy.dialects.postgresql import ENUM, JSON, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -85,6 +85,8 @@ class WaConversation(Base):
     winning_rate: Mapped[int] = mapped_column(SmallInteger, server_default=text("0"))
     mode: Mapped[str] = mapped_column(MODE_ENUM, server_default=text("'human'"))
     note: Mapped[str | None] = mapped_column(String)
+    # Kontak tim sendiri; percakapannya dibuang dari semua query stat.
+    is_internal: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
     last_read_id: Mapped[str | None] = mapped_column(CHAR(21))
     created_at: Mapped[datetime] = mapped_column(server_default=text("CURRENT_TIMESTAMP"))
     updated_at: Mapped[datetime] = mapped_column(

@@ -14,7 +14,7 @@ TURNS_CTE = """
         SELECT c.id, c.conv_id, c.direction, c.created_at
         FROM wa_chats c
         JOIN wa_conversations v ON v.id = c.conv_id
-        WHERE v.tenant_id = :tenant_id
+        WHERE v.tenant_id = :tenant_id AND NOT v.is_internal
     ),
     ordered AS (
         SELECT conv_id, direction, created_at,
@@ -44,7 +44,7 @@ _LAST_MESSAGE_CTE = """
             c.conv_id, c.direction, c.created_at, c.type, c.message
         FROM wa_chats c
         JOIN wa_conversations v ON v.id = c.conv_id
-        WHERE v.tenant_id = :tenant_id
+        WHERE v.tenant_id = :tenant_id AND NOT v.is_internal
         ORDER BY c.conv_id, c.created_at DESC, c.id DESC
     )
 """
@@ -85,7 +85,8 @@ class StatRepository:
             ),
             fresh AS (
                 SELECT id FROM wa_conversations
-                WHERE tenant_id = :tenant_id AND created_at >= :start_at AND created_at < :end_at
+                WHERE tenant_id = :tenant_id AND NOT is_internal
+                  AND created_at >= :start_at AND created_at < :end_at
             )
             SELECT
                 (SELECT COUNT(*) FROM active) AS active_conversation_count,
@@ -124,7 +125,7 @@ class StatRepository:
                     (v.created_at AT TIME ZONE :tz)::date AS conversation_started_on
                 FROM wa_chats c
                 JOIN wa_conversations v ON v.id = c.conv_id
-                WHERE v.tenant_id = :tenant_id
+                WHERE v.tenant_id = :tenant_id AND NOT v.is_internal
                   AND c.direction = 'inbound'
                   AND c.created_at >= :start_at AND c.created_at < :end_at
             )
@@ -206,7 +207,7 @@ class StatRepository:
                     AS conversation_count
             FROM wa_chats c
             JOIN wa_conversations v ON v.id = c.conv_id
-            WHERE v.tenant_id = :tenant_id
+            WHERE v.tenant_id = :tenant_id AND NOT v.is_internal
               AND c.created_at >= :start_at AND c.created_at < :end_at
             GROUP BY 1, 2
             ORDER BY 1, 2
@@ -227,7 +228,7 @@ class StatRepository:
             convs AS (
                 SELECT lead_status, mode, winning_rate, project_value
                 FROM wa_conversations
-                WHERE tenant_id = :tenant_id
+                WHERE tenant_id = :tenant_id AND NOT is_internal
                   AND created_at >= :start_at AND created_at < :end_at
             )
             SELECT
@@ -318,7 +319,7 @@ class StatRepository:
                 ROUND(EXTRACT(EPOCH FROM (NOW() - lm.created_at)) / 3600)::int AS idle_hours
             FROM wa_conversations v
             LEFT JOIN last_message lm ON lm.conv_id = v.id
-            WHERE v.tenant_id = :tenant_id
+            WHERE v.tenant_id = :tenant_id AND NOT v.is_internal
               AND v.brand_name IS NOT NULL
             ORDER BY lm.created_at
             LIMIT :limit OFFSET :skip
@@ -331,7 +332,7 @@ class StatRepository:
     async def count_needs_action(self, *, tenant_id: str) -> int:
         stmt = text("""
             SELECT COUNT(*) FROM wa_conversations
-            WHERE tenant_id = :tenant_id AND brand_name IS NOT NULL
+            WHERE tenant_id = :tenant_id AND NOT is_internal AND brand_name IS NOT NULL
         """)
         result = await self._session.execute(stmt, {"tenant_id": tenant_id})
         return int(result.scalar_one())

@@ -137,6 +137,7 @@ CREATE TABLE wa_conversations (
   winning_rate   SMALLINT             NOT NULL     DEFAULT 0,
   mode           wa_mode_enum         NOT NULL     DEFAULT 'human',
   note           VARCHAR                  NULL,
+  is_internal    BOOLEAN              NOT NULL     DEFAULT false,
   last_read_id   CHAR(21)                 NULL,
   created_at     TIMESTAMPTZ          NOT NULL     DEFAULT CURRENT_TIMESTAMP,
   updated_at     TIMESTAMPTZ          NOT NULL     DEFAULT CURRENT_TIMESTAMP,

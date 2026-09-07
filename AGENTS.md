@@ -67,5 +67,5 @@ LangGraph automation agents live in `app/modules/agents/<agent_name>/`, sharing 
 
 - **RLS is disabled on every table.** Supabase's Data API exposes all tables unrestricted to anyone with the anon/service key. Don't enable RLS without policies — it would lock out this app's own connection too. Needs a deliberate pass.
 - **App INFO logs arrive tagged `error` on Railway.** Python logging writes to stderr by default and the platform classifies stderr as error severity, so successful agent runs look like failures in the log stream. Cosmetic, but it buries real errors.
-- **`pureva-ai`'s Prisma schema currently drifts from the live database.** The funnel stages in `wa_lead_status_enum`, the `brand_name`/`project_value` columns, and the `human` default on `mode` were applied to Postgres from this repo and have not been mirrored back into Prisma yet.
+- **`pureva-ai`'s Prisma schema currently drifts from the live database.** The funnel stages in `wa_lead_status_enum`, the `brand_name`/`project_value`/`is_internal` columns, and the `human` default on `mode` were applied to Postgres from this repo and have not been mirrored back into Prisma yet.
 - No automated tests. No CI config in this repo.
