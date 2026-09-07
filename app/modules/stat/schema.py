@@ -12,12 +12,19 @@ class StatRequest(BaseModel):
     timezone: str | None = None
 
 
-class ResponseTimeRequest(StatRequest):
+class TargetRequest(StatRequest):
+    """Field untuk endpoint yang mengukur first response terhadap sebuah target."""
+
     # Target first response dari dokumen evaluasi: 15 menit.
     target_seconds: int = Field(default=900, ge=1, le=86_400)
 
 
-class SummaryRequest(ResponseTimeRequest):
+class ResponseTimeRequest(TargetRequest):
+    # Sabtu–Minggu dibuang dari seri kalau tim memang tidak berjaga di akhir pekan.
+    exclude_weekend: bool = False
+
+
+class SummaryRequest(TargetRequest):
     pass
 
 

@@ -110,10 +110,12 @@ class StatService:
             end_at=end_at,
             tz=tz_name,
             target_seconds=req.target_seconds,
+            exclude_weekend=req.exclude_weekend,
         )
         return {
             **self._period(start_at, end_at, tz_name),
             "target_seconds": req.target_seconds,
+            "exclude_weekend": req.exclude_weekend,
             "list": [
                 {
                     **r,

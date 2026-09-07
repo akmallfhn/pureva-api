@@ -153,16 +153,19 @@ class StatRepository:
         end_at: datetime,
         tz: str,
         target_seconds: int,
+        exclude_weekend: bool,
     ) -> list[dict[str, Any]]:
         # Hari tanpa pesan masuk tetap dikembalikan (median null) supaya line chart tidak putus.
         stmt = text(f"""
             WITH {TURNS_CTE},
             days AS (
-                SELECT generate_series(
+                SELECT d::date AS bucket
+                FROM generate_series(
                     (:start_at AT TIME ZONE :tz)::date,
                     ((:end_at AT TIME ZONE :tz) - INTERVAL '1 microsecond')::date,
                     INTERVAL '1 day'
-                )::date AS bucket
+                ) d
+                WHERE NOT CAST(:exclude_weekend AS boolean) OR EXTRACT(ISODOW FROM d) < 6
             ),
             per_day AS (
                 SELECT (inbound_at AT TIME ZONE :tz)::date AS bucket, inbound_at, replied_at
@@ -184,6 +187,7 @@ class StatRepository:
                 "end_at": end_at,
                 "tz": tz,
                 "target_seconds": target_seconds,
+                "exclude_weekend": exclude_weekend,
             },
         )
         return _rows(result)

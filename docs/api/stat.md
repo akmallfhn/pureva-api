@@ -167,7 +167,8 @@ Mengembalikan first response time median dan p90 per hari, beserta jumlah turn y
   "start_date": "2026-08-30",
   "end_date": "2026-09-02",
   "timezone": "Asia/Jakarta",
-  "target_seconds": 900
+  "target_seconds": 900,
+  "exclude_weekend": true
 }
 ```
 
@@ -178,6 +179,7 @@ Mengembalikan first response time median dan p90 per hari, beserta jumlah turn y
 | `end_date` | string (`YYYY-MM-DD`) | no |
 | `timezone` | string (IANA) | no |
 | `target_seconds` | integer (1–86400) | no |
+| `exclude_weekend` | boolean | no |
 
 **Response** — `200 OK`
 
@@ -192,6 +194,7 @@ Mengembalikan first response time median dan p90 per hari, beserta jumlah turn y
     "end_date": "2026-09-02",
     "timezone": "Asia/Jakarta",
     "target_seconds": 900,
+    "exclude_weekend": true,
     "list": [
       {
         "date": "2026-09-01",
@@ -218,7 +221,7 @@ Mengembalikan first response time median dan p90 per hari, beserta jumlah turn y
 }
 ```
 
-Hari tanpa pesan masuk tetap dikembalikan dengan median dan p90 `null`, supaya garis pada chart tidak terputus.
+Hari tanpa pesan masuk tetap dikembalikan dengan median dan p90 `null`, supaya garis pada chart tidak terputus. `exclude_weekend` bernilai `true` membuang Sabtu dan Minggu dari seri — turn yang jatuh di akhir pekan tidak ikut dihitung sama sekali. Default `false`: semua hari dikembalikan.
 
 **Errors**
 
