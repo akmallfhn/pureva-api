@@ -4,7 +4,7 @@ Instructions for coding agents (Claude Code, Codex, or others) working in this r
 
 ## What this is
 
-Pureva API is the single Python backend for Pureva, a multitenant WhatsApp brand-deal platform. It does three things: (1) receives Meta WhatsApp Cloud API webhooks — inbound customer messages, echoes of outbound messages sent from the WhatsApp Business App (coexistence), and delivery status updates — and persists them per tenant, uploading media attachments to Supabase Storage; (2) serves read-only aggregate endpoints under `/api/v1/stats` for the 360° brand-deal evaluation dashboard; (3) runs LangGraph agents that read those conversations and write structured fields back. Tenant routing is by `wa_phone_number_id`: the WhatsApp number an event arrives on decides which tenant owns it.
+Pureva API is the single Python backend for Pureva, a multitenant WhatsApp brand-deal platform. It does four things: (1) receives Meta WhatsApp Cloud API webhooks — inbound customer messages, echoes of outbound messages sent from the WhatsApp Business App (coexistence), and delivery status updates — and persists them per tenant, uploading media attachments to Supabase Storage; (2) serves read-only aggregate endpoints under `/api/v1/stats` for the 360° brand-deal evaluation dashboard; (3) runs LangGraph agents that read those conversations and write structured fields back; and (4) answers internal questions about those conversations over a streaming chat endpoint, retrieving from the same aggregates the dashboard uses. Tenant routing is by `wa_phone_number_id`: the WhatsApp number an event arrives on decides which tenant owns it.
 
 Postgres via Supabase. Deployed on Railway.
 
@@ -28,6 +28,7 @@ Python 3.12+, FastAPI, SQLAlchemy 2 async (`asyncpg`), Pydantic v2 + pydantic-se
 | `stat` | Read-only aggregate endpoints for the dashboard — volume, response time, heatmap, lead funnel, unanswered, brand deals |
 | `tenant` | Tenant lookup by id and by `wa_phone_number_id` |
 | `agents` | LangGraph automation agents — see `docs/agents/README.md` |
+| `knowledge` | Internal Q&A chatbot: thread CRUD plus an SSE endpoint backed by a retrieval agent and a job queue — see `docs/api/knowledge.md` |
 | `health` | Liveness and database reachability |
 | `shared` | Response envelope, `ApiError`, Bearer auth, pagination, shared httpx client, Meta signature verification, Supabase Storage client |
 | `core`, `db` | Settings and the lazy async engine/session factory |
@@ -45,6 +46,8 @@ Python 3.12+, FastAPI, SQLAlchemy 2 async (`asyncpg`), Pydantic v2 + pydantic-se
 - **Enums are created by the DDL in `docs/db/`, not by SQLAlchemy.** Every `ENUM(...)` in an entity is declared `create_type=False`. `updated_at` is maintained by the ORM layer, not by database triggers — this database has no triggers.
 - **Comments:** one line, no multi-line comment blocks. If it needs more than one line, it needs a shorter explanation instead. Comments and docs are Indonesian; identifiers, enum values, column names, and API fields are English.
 - **Formatting:** `ruff` with line length 100, double quotes, and `E`/`F`/`I` lint rules. Run `uv run ruff format .` before committing.
+- **Streaming responses are the one other envelope exception.** `knowledge/chat/stream` answers `text/event-stream`, but everything that can be rejected before the stream opens (auth, validation, unknown conversation, full queue) is still refused with the normal envelope — never as an error event mid-stream. Every SSE `data:` line carries one JSON-encoded string, no exceptions, so the client parser stays a single branch.
+- **The knowledge agent never answers from the model's own memory.** Retrieval goes through `ToolBox`, which wraps `StatService` rather than writing its own SQL — if the chat and the dashboard ever disagree on a number, that is a bug. Adding a metric means adding it to `stat` first, then exposing it as a tool.
 - **Module API docs:** every module with client-facing endpoints has a `docs/api/<module>.md` — one intro paragraph, then per endpoint: one-sentence description, `**Method:**`/`**Authorization:**` lines, request and response as JSON code blocks (request also gets a Field/Type/Required table; response doesn't), and an errors table. No base_url explanation, no curl examples.
 
 ## Database
