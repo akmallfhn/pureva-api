@@ -24,7 +24,7 @@ _session_factory: async_sessionmaker[AsyncSession] | None = None
 
 
 def normalize_database_url(url: str) -> tuple[str, dict]:
-    """Ubah URL Prisma/libpq ke asyncpg; param libpq yang ditolak dipindah ke connect_args."""
+    """Ubah URL libpq ke asyncpg; param libpq yang ditolak dipindah ke connect_args."""
     parts = urlsplit(url)
     query = parse_qs(parts.query)
     connect_args: dict = {}

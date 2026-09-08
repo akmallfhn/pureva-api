@@ -568,7 +568,7 @@ Endpoint ini tidak menerima `start_date`/`end_date`/`timezone`: daftarnya adalah
 
 ## Metrik yang belum bisa dilayani
 
-Dua elemen dashboard pada dokumen evaluasi masih belum punya sumber data di schema dan belum dibuatkan endpoint. Keduanya butuh penambahan kolom di schema Prisma milik `pureva-ai` lebih dulu.
+Dua elemen dashboard pada dokumen evaluasi masih belum punya sumber data di schema dan belum dibuatkan endpoint. Keduanya butuh penambahan kolom di schema lebih dulu (`docs/db/pureva.sql`).
 
 | Elemen dashboard | Yang dibutuhkan |
 |---|---|

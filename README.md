@@ -1,12 +1,12 @@
 # Pureva API
 
 Single backend untuk **Pureva**: menerima webhook WhatsApp Cloud API langsung dari Meta dan
-mencatatnya ke **Postgres multitenant** yang sama dengan app `pureva-ai` (Next.js).
+mencatatnya ke **Postgres multitenant** di Supabase.
 
 Dibangun dengan **FastAPI + SQLAlchemy (async) + asyncpg**.
 
-Schema Postgres-nya dimiliki Prisma di repo `pureva-ai` — repo ini **tidak pernah** mengeluarkan
-DDL. Tabel yang dipakai: `tenants`, `wa_conversations`, `wa_chats`.
+DDL referensinya ada di `docs/db/pureva.sql`; SQLAlchemy tidak pernah menggenerate schema.
+Tabel yang dipakai: `tenants`, `wa_conversations`, `wa_chats`.
 
 ## Alur
 
@@ -40,7 +40,7 @@ app/
   core/config.py                # Settings (.env)
   db/
     base.py                     # DeclarativeBase entity Postgres
-    session.py                  # engine async + session (normalisasi URL Prisma -> asyncpg)
+    session.py                  # engine async + session (normalisasi URL libpq -> asyncpg)
   shared/
     security.py                 # verifikasi signature Meta
     http.py                     # httpx client seumur hidup app
@@ -83,7 +83,7 @@ uv run dev          # http://localhost:$APP_PORT  (reload)
 Port mengikuti pola yang sama dengan `ordina`: `PORT` (di-inject Railway/PaaS saat runtime)
 dengan fallback `APP_PORT` untuk lokal.
 
-`DATABASE_URL` boleh langsung disalin dari `pureva-ai/.env` — format Prisma
+`DATABASE_URL` memakai connection string Postgres biasa — param libpq
 (`?schema=public`, `?pgbouncer=true`, `?sslmode=require`) dinormalisasi otomatis ke asyncpg.
 Kalau pakai connection pooler Supabase (port 6543), prepared statement cache dimatikan sendiri.
 
@@ -116,11 +116,11 @@ Kalau `META_APP_SECRET` kosong, verifikasi signature **dilewati** (hanya untuk d
 - **`created_at` diambil dari timestamp Meta**, bukan waktu server, supaya urutan chat di UI
   mengikuti waktu kirim sebenarnya.
 - Bucket dan layout path Storage (`<slug>/<type>s/<ts>_<media_id>.<ext>`) sengaja sama dengan
-  yang dibaca UI `pureva-ai`.
+  yang dibaca UI dashboard.
 
 ## Known Gaps
 
-- **RLS mati di semua tabel** Postgres-nya (isu lintas repo, bukan dari sini). Siapa pun dengan
+- **RLS mati di semua tabel** Postgres-nya. Siapa pun dengan
   anon key bisa baca/tulis `tenants` — termasuk kolom `wa_access_token`. Perlu pass tersendiri;
   mengaktifkan RLS tanpa policy akan mengunci app sendiri.
 - Belum ada test suite otomatis. Verifikasi perubahan dengan `uv run ruff check app` plus

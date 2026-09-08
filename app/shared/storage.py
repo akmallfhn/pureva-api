@@ -1,4 +1,4 @@
-"""Upload attachment ke Supabase Storage; bucket & path sama dengan yang dibaca UI pureva-ai."""
+"""Upload attachment ke Supabase Storage; bucket & path sama dengan yang dibaca UI dashboard."""
 
 import time
 

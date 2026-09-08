@@ -41,7 +41,7 @@ CHAT_STATUS_DELIVERED = "delivered"
 CHAT_STATUS_READ = "read"
 CHAT_STATUS_FAILED = "failed"
 
-# create_type=False: enum-nya sudah ada di Postgres, dimiliki schema Prisma pureva-ai.
+# create_type=False: enum-nya sudah ada di Postgres, dibuat lewat DDL di docs/db.
 LEAD_STATUS_ENUM = ENUM(
     "cold",
     "qualified",

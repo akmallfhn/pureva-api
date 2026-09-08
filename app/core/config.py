@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     # Railway (dan PaaS lain) inject PORT saat runtime; APP_PORT fallback lokal.
     port: int = Field(default=8000, validation_alias=AliasChoices("PORT", "APP_PORT"))
 
-    # Postgres multitenant pureva, dipakai bareng app pureva-ai (Next.js).
+    # Postgres multitenant pureva di Supabase.
     database_url: str = ""
     db_pool_size: int = 10
     db_max_overflow: int = 0
@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     # Agent automation (LangGraph). Model & batasnya konstanta di app/modules/agents.
     openai_api_key: str = ""
 
-    # Supabase Storage untuk attachment WhatsApp; bucket sama dengan yang dibaca UI pureva-ai.
+    # Supabase Storage untuk attachment WhatsApp; bucket sama dengan yang dibaca UI dashboard.
     supabase_url: str = ""
     supabase_service_role_key: str = ""
     supabase_bucket: str = "pureva"

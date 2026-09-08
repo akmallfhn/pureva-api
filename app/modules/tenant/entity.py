@@ -9,7 +9,7 @@ from app.db.base import Base
 STATUS_ACTIVE = "active"
 STATUS_INACTIVE = "inactive"
 
-# create_type=False: enum-nya sudah ada di Postgres, dimiliki schema Prisma pureva-ai.
+# create_type=False: enum-nya sudah ada di Postgres, dibuat lewat DDL di docs/db.
 STATUS_ENUM = ENUM(STATUS_ACTIVE, STATUS_INACTIVE, name="status_enum", create_type=False)
 
 
