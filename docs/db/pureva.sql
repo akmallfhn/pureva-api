@@ -74,6 +74,20 @@ CREATE TYPE wa_alert_status_enum AS ENUM (
   'bounced'
 );
 
+-- Enumeration for the kb_chats table (kbc_*)
+
+CREATE TYPE kbc_role_enum AS ENUM (
+  'user',
+  'assistant'
+);
+
+CREATE TYPE kbc_status_enum AS ENUM (
+  'queued',
+  'streaming',
+  'done',
+  'failed'
+);
+
 ------------
 -- Tables --
 ------------
@@ -173,6 +187,28 @@ CREATE TABLE wa_alerts (
   updated_at        TIMESTAMPTZ           NOT NULL  DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Knowledge chat
+
+CREATE TABLE kb_conversations (
+  id          CHAR(21)     PRIMARY KEY  DEFAULT nanoid(),
+  tenant_id   CHAR(21)     NOT NULL,
+  title       VARCHAR      NOT NULL     DEFAULT '',
+  created_at  TIMESTAMPTZ  NOT NULL     DEFAULT CURRENT_TIMESTAMP,
+  updated_at  TIMESTAMPTZ  NOT NULL     DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE kb_chats (
+  id          CHAR(21)         PRIMARY KEY  DEFAULT nanoid(),
+  conv_id     CHAR(21)         NOT NULL,
+  role        kbc_role_enum    NOT NULL,
+  message     VARCHAR          NOT NULL     DEFAULT '',
+  status      kbc_status_enum      NULL,
+  error       VARCHAR              NULL,
+  sources     JSON                 NULL,
+  created_at  TIMESTAMPTZ      NOT NULL     DEFAULT CURRENT_TIMESTAMP,
+  updated_at  TIMESTAMPTZ      NOT NULL     DEFAULT CURRENT_TIMESTAMP
+);
+
 ----------------
 -- References --
 ----------------
@@ -199,6 +235,14 @@ ALTER TABLE wa_chats
 ALTER TABLE wa_alerts
   ADD FOREIGN KEY (conv_id) REFERENCES wa_conversations (id);
 
+-- Knowledge chat
+
+ALTER TABLE kb_conversations
+  ADD FOREIGN KEY (tenant_id) REFERENCES tenants (id);
+
+ALTER TABLE kb_chats
+  ADD FOREIGN KEY (conv_id) REFERENCES kb_conversations (id) ON DELETE CASCADE;
+
 -------------
 -- Indexes --
 -------------
@@ -208,3 +252,20 @@ ALTER TABLE wa_alerts
 CREATE INDEX wa_conversations_tenant_id_idx  ON wa_conversations (tenant_id);
 CREATE INDEX wa_chats_conv_id_idx            ON wa_chats (conv_id);
 CREATE INDEX wa_alerts_conv_id_idx           ON wa_alerts (conv_id);
+
+-- Knowledge chat
+
+CREATE INDEX kb_conversations_tenant_id_idx  ON kb_conversations (tenant_id, updated_at DESC);
+CREATE INDEX kb_chats_conv_id_idx            ON kb_chats (conv_id, created_at);
+
+-- Retriever leksikal Knowledge; ILIKE brand/pesan tanpa ini jadi seq scan penuh.
+
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+CREATE INDEX wa_conversations_brand_name_trgm_idx
+  ON wa_conversations USING GIN (brand_name gin_trgm_ops);
+CREATE INDEX wa_conversations_full_name_trgm_idx
+  ON wa_conversations USING GIN (full_name gin_trgm_ops);
+CREATE INDEX wa_chats_message_trgm_idx
+  ON wa_chats USING GIN (message gin_trgm_ops);
+-- Di database yang sudah jalan, ketiganya dibuat CONCURRENTLY; lihat docs/db/knowledge.sql.
