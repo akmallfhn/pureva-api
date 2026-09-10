@@ -248,14 +248,17 @@ class ChatRunner:
             tz, tz_name = ZoneInfo("UTC"), "UTC"
 
         now = datetime.now(tz)
-        latest = await self._retrieval.latest_activity(tenant_id=tenant_id)
+        earliest, latest = await self._retrieval.activity_window(tenant_id=tenant_id)
+
+        def stamp(at: datetime | None) -> str:
+            return at.astimezone(tz).strftime("%Y-%m-%d %H:%M") if at else "belum ada"
+
         return SYSTEM_PROMPT.format(
             today=now.date().isoformat(),
             weekday=_WEEKDAY[now.weekday()],
             timezone=tz_name,
-            latest_activity=(
-                latest.astimezone(tz).strftime("%Y-%m-%d %H:%M") if latest else "belum ada"
-            ),
+            earliest_activity=stamp(earliest),
+            latest_activity=stamp(latest),
         )
 
 

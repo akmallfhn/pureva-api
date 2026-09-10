@@ -1,5 +1,7 @@
 """CRUD thread Knowledge, plus retriever leksikal ke percakapan WhatsApp yang jadi korpusnya."""
 
+import json
+import re
 from datetime import datetime
 from typing import Any
 
@@ -20,6 +22,77 @@ SNIPPET_CHARS = 240
 # Batas transkrip satu percakapan supaya satu tool call tidak menghabiskan context window.
 MAX_TRANSCRIPT_CHATS = 120
 MAX_TRANSCRIPT_MESSAGE_CHARS = 400
+
+# Lebih lebar dari snippet jadinya; jendela di sekitar kata cocok dipotong di Python.
+SNIPPET_SOURCE_CHARS = 1200
+SNIPPET_COUNT = 3
+
+# Default pg_trgm 0.6 kelewat ketat untuk bahasa campur; 0.45 masih menolak yang tak nyambung.
+FUZZY_THRESHOLD = 0.45
+
+# 0.45 menuntut similarity >= 0.53 pada nama brand; skor ini dikali 1.6 di peringkat akhir.
+MIN_IDENTITY_SCORE = 0.45
+
+# Kata pendek dilarang: trigram "nego" menabrak "Negeri", "harga" menabrak "Grand".
+FUZZY_IDENTITY_MIN_CHARS = 5
+
+# Menuntut similarity >= 0.6; di bawahnya word_similarity ke paragraf note selalu dapat.
+MIN_NOTE_SCORE = 0.21
+
+MIN_TERM_CHARS = 3
+MAX_TERMS = 6
+
+SPEAKER = {"inbound": "Brand", "outbound": "TRC"}
+
+# "deal" dan "brand" ikut dibuang karena seluruh korpus ini memang brand deal.
+_STOPWORDS = frozenset(
+    {
+        "yang",
+        "yng",
+        "dan",
+        "atau",
+        "dengan",
+        "dgn",
+        "untuk",
+        "utk",
+        "dari",
+        "pada",
+        "ada",
+        "apa",
+        "apakah",
+        "siapa",
+        "kapan",
+        "kenapa",
+        "mengapa",
+        "mana",
+        "dimana",
+        "gimana",
+        "bagaimana",
+        "berapa",
+        "ini",
+        "itu",
+        "aja",
+        "saja",
+        "sudah",
+        "udah",
+        "belum",
+        "tidak",
+        "gak",
+        "nggak",
+        "bukan",
+        "buat",
+        "nya",
+        "yaa",
+        "iya",
+        "chat",
+        "pesan",
+        "percakapan",
+        "deal",
+        "brand",
+        "client",
+        "klien",
+    }
+)
 
 
 class KnowledgeRepository:
@@ -197,91 +270,251 @@ class RetrievalRepository:
 
     async def search_conversations(
         self, *, tenant_id: str, query: str, limit: int
-    ) -> list[dict[str, Any]]:
-        """Cari identitas percakapan + isi pesan; skor brand/nama lebih berat dari isi pesan."""
+    ) -> dict[str, Any]:
+        """Dua jalur cocok: ILIKE eksak dan trigram fuzzy; skor dipecah per komponen di hasil."""
+        terms = _terms(query)
+        if not terms:
+            return {"query": query, "terms": [], "total_found": 0, "list": []}
+
+        # Operator <% supaya index GIN trgm kepakai; ambangnya transaction-local.
+        await self._session.execute(
+            text("SELECT set_config('pg_trgm.word_similarity_threshold', :value, true)"),
+            {"value": str(FUZZY_THRESHOLD)},
+        )
+
         stmt = text("""
-            WITH pattern AS (
-                SELECT '%' || :query || '%' AS like_query
+            WITH terms AS (
+                SELECT DISTINCT lower(t) AS term FROM unnest(CAST(:terms AS text[])) AS t
             ),
-            identity AS (
-                SELECT v.id AS conv_id, 3 AS weight, NULL::text AS snippet, NULL::timestamptz AS at
-                FROM wa_conversations v, pattern p
-                WHERE v.tenant_id = :tenant_id AND NOT v.is_internal
-                  AND (v.brand_name ILIKE p.like_query
-                       OR v.full_name ILIKE p.like_query
-                       OR v.phone_number ILIKE p.like_query
-                       OR v.note ILIKE p.like_query)
+            scope AS (
+                SELECT id, brand_name, full_name, phone_number, note
+                FROM wa_conversations
+                WHERE tenant_id = :tenant_id AND NOT is_internal
             ),
-            body AS (
-                SELECT c.conv_id, 1 AS weight,
-                       LEFT(c.message, :snippet_chars) AS snippet,
-                       c.created_at AS at
+            -- Identitas = siapa percakapan ini: nama brand, nama kontak, nomor. Ini yang
+            -- menjawab "cari deal Tokopedia", dan kecocokan di sini paling meyakinkan.
+            identity_hits AS (
+                SELECT
+                    v.id AS conv_id,
+                    t.term,
+                    CASE
+                        WHEN v.brand_name   ILIKE '%' || t.term || '%' THEN 1.00
+                        WHEN v.full_name    ILIKE '%' || t.term || '%' THEN 0.90
+                        WHEN v.phone_number ILIKE '%' || t.term || '%' THEN 0.85
+                        WHEN LENGTH(t.term) < :fuzzy_min_chars THEN 0
+                        ELSE GREATEST(
+                            word_similarity(t.term, COALESCE(v.brand_name, '')) * 0.85,
+                            word_similarity(t.term, COALESCE(v.full_name, ''))  * 0.75
+                        )
+                    END AS score,
+                    CASE
+                        WHEN v.brand_name   ILIKE '%' || t.term || '%' THEN 'brand_name'
+                        WHEN v.full_name    ILIKE '%' || t.term || '%' THEN 'full_name'
+                        WHEN v.phone_number ILIKE '%' || t.term || '%' THEN 'phone_number'
+                        ELSE 'identity_fuzzy'
+                    END AS field
+                FROM scope v CROSS JOIN terms t
+            ),
+            -- note itu ringkasan naratif percakapan yang ditulis agent, bukan label pendek:
+            -- isinya konten, bukan identitas. Dulu ia ikut blok identitas dengan bobot 0.70
+            -- dan membuat tiap percakapan bertopik sama seri di skor yang persis sama.
+            note_hits AS (
+                SELECT
+                    v.id AS conv_id,
+                    t.term,
+                    CASE WHEN v.note ILIKE '%' || t.term || '%' THEN 0.45
+                         ELSE word_similarity(t.term, COALESCE(v.note, '')) * 0.35 END AS score
+                FROM scope v CROSS JOIN terms t
+            ),
+            -- Kecocokan pada isi pesan. ILIKE dan <% dua-duanya index-assisted lewat index
+            -- GIN trgm di wa_chats.message.
+            body_hits AS (
+                SELECT
+                    c.conv_id, c.id AS chat_id, t.term,
+                    c.direction::text AS direction,
+                    c.created_at,
+                    LEFT(c.message, :source_chars) AS message,
+                    (c.message ILIKE '%' || t.term || '%') AS is_exact,
+                    CASE WHEN c.message ILIKE '%' || t.term || '%' THEN 0.60
+                         ELSE word_similarity(t.term, c.message) * 0.45 END AS score
                 FROM wa_chats c
-                JOIN wa_conversations v ON v.id = c.conv_id, pattern p
-                WHERE v.tenant_id = :tenant_id AND NOT v.is_internal
-                  AND c.message ILIKE p.like_query
+                JOIN scope v ON v.id = c.conv_id
+                CROSS JOIN terms t
+                WHERE c.message <> ''
+                  AND (c.message ILIKE '%' || t.term || '%' OR t.term <% c.message)
             ),
-            hits AS (
-                SELECT * FROM identity
-                UNION ALL
-                SELECT * FROM body
+            -- Satu pesan bisa kena beberapa term; simpan kecocokan terkuatnya saja supaya
+            -- pesan yang memuat semua kata tidak dihitung berkali-kali.
+            body_best AS (
+                SELECT DISTINCT ON (chat_id) * FROM body_hits ORDER BY chat_id, score DESC
             ),
-            scored AS (
+            identity_rolled AS (
                 SELECT conv_id,
-                       SUM(weight) AS score,
-                       COUNT(*) FILTER (WHERE snippet IS NOT NULL) AS message_hit_count,
-                       MAX(at) AS last_hit_at,
-                       (ARRAY_REMOVE(ARRAY_AGG(snippet ORDER BY at DESC NULLS LAST), NULL))[1:3]
-                           AS snippets
-                FROM hits
+                       MAX(score) AS score,
+                       ARRAY_AGG(DISTINCT term)  AS terms,
+                       ARRAY_AGG(DISTINCT field) AS fields
+                FROM identity_hits WHERE score >= :min_score GROUP BY conv_id
+            ),
+            note_rolled AS (
+                SELECT conv_id,
+                       MAX(score) AS score,
+                       ARRAY_AGG(DISTINCT term) AS terms
+                FROM note_hits WHERE score >= :min_note_score GROUP BY conv_id
+            ),
+            body_rolled AS (
+                SELECT conv_id,
+                       MAX(score) AS score,
+                       COUNT(*) AS hit_count,
+                       COUNT(*) FILTER (WHERE is_exact) AS exact_hit_count,
+                       ARRAY_AGG(DISTINCT term) AS terms
+                FROM body_best GROUP BY conv_id
+            ),
+            snippets AS (
+                SELECT conv_id, JSON_AGG(JSON_BUILD_OBJECT(
+                           'at', created_at, 'direction', direction,
+                           'term', term, 'exact', is_exact, 'text', message
+                       ) ORDER BY score DESC, created_at DESC) AS items
+                FROM (
+                    SELECT *, ROW_NUMBER() OVER (
+                        PARTITION BY conv_id ORDER BY score DESC, created_at DESC
+                    ) AS rn FROM body_best
+                ) r
+                WHERE rn <= :snippet_count
                 GROUP BY conv_id
+            ),
+            merged AS (
+                SELECT
+                    COALESCE(i.conv_id, n.conv_id, b.conv_id) AS conv_id,
+                    COALESCE(i.score, 0) AS identity_score,
+                    COALESCE(n.score, 0) AS note_score,
+                    COALESCE(b.score, 0) AS body_score,
+                    COALESCE(b.hit_count, 0) AS message_hit_count,
+                    COALESCE(b.exact_hit_count, 0) AS exact_message_hit_count,
+                    COALESCE(i.fields, ARRAY[]::text[])
+                        || CASE WHEN n.conv_id IS NULL THEN ARRAY[]::text[]
+                                ELSE ARRAY['note'] END AS matched_fields,
+                    ARRAY(SELECT DISTINCT unnest(
+                        COALESCE(i.terms, ARRAY[]::text[])
+                        || COALESCE(n.terms, ARRAY[]::text[])
+                        || COALESCE(b.terms, ARRAY[]::text[])
+                    )) AS matched_terms
+                FROM identity_rolled i
+                FULL OUTER JOIN note_rolled n ON n.conv_id = i.conv_id
+                FULL OUTER JOIN body_rolled b
+                    ON b.conv_id = COALESCE(i.conv_id, n.conv_id)
             )
             SELECT
-                v.id AS conv_id,
-                v.full_name,
-                v.phone_number,
-                v.brand_name,
-                v.lead_status::text AS lead_status,
-                v.project_value,
-                v.note,
-                s.score,
-                s.message_hit_count,
-                s.snippets,
-                (SELECT MAX(c.created_at) FROM wa_chats c WHERE c.conv_id = v.id)
-                    AS last_message_at
-            FROM scored s
-            JOIN wa_conversations v ON v.id = s.conv_id
-            ORDER BY s.score DESC, last_message_at DESC NULLS LAST
+                v.id AS conv_id, v.brand_name, v.full_name, v.phone_number,
+                v.lead_status::text AS lead_status, v.project_value, v.winning_rate,
+                v.mode::text AS mode, v.note,
+                v.created_at AS conversation_started_at,
+                ROUND(m.identity_score::numeric, 3) AS identity_score,
+                ROUND(m.note_score::numeric, 3)     AS note_score,
+                ROUND(m.body_score::numeric, 3)     AS body_score,
+                m.message_hit_count,
+                m.exact_message_hit_count,
+                m.matched_fields,
+                m.matched_terms,
+                -- Identitas dikali 1.6 supaya percakapan yang memang milik brand itu tidak
+                -- pernah kalah dari percakapan lain yang cuma menyebut namanya berkali-kali:
+                -- identitas penuh 1.60 di atas plafon gabungan sisanya (0.45+0.60+0.32 = 1.37).
+                -- Jumlah pesan yang kena dan cakupan term yang membedakan peringkat di
+                -- pencarian topik, tempat tidak ada satu pun kecocokan identitas.
+                ROUND((m.identity_score * 1.6
+                       + m.note_score
+                       + m.body_score
+                       + LEAST(m.message_hit_count, 8) * 0.04
+                       + CARDINALITY(m.matched_terms)::numeric
+                         / GREATEST(CARDINALITY(CAST(:terms AS text[])), 1) * 0.35
+                      )::numeric, 3) AS relevance,
+                s.items AS snippets,
+                st.inbound_count, st.outbound_count,
+                st.first_message_at, st.last_message_at
+            FROM merged m
+            JOIN wa_conversations v ON v.id = m.conv_id
+            LEFT JOIN snippets s ON s.conv_id = m.conv_id
+            LEFT JOIN LATERAL (
+                SELECT COUNT(*) FILTER (WHERE direction = 'inbound')  AS inbound_count,
+                       COUNT(*) FILTER (WHERE direction = 'outbound') AS outbound_count,
+                       MIN(created_at) AS first_message_at,
+                       MAX(created_at) AS last_message_at
+                FROM wa_chats WHERE conv_id = v.id
+            ) st ON TRUE
+            ORDER BY relevance DESC, st.last_message_at DESC NULLS LAST
             LIMIT :limit
         """)
         result = await self._session.execute(
             stmt,
             {
                 "tenant_id": tenant_id,
-                "query": query,
+                "terms": terms,
                 "limit": limit,
-                "snippet_chars": SNIPPET_CHARS,
+                "min_score": MIN_IDENTITY_SCORE,
+                "min_note_score": MIN_NOTE_SCORE,
+                "fuzzy_min_chars": FUZZY_IDENTITY_MIN_CHARS,
+                "snippet_count": SNIPPET_COUNT,
+                "source_chars": SNIPPET_SOURCE_CHARS,
             },
+        )
+        rows = [_shape_hit(dict(row)) for row in result.mappings().all()]
+        return {"query": query, "terms": terms, "total_found": len(rows), "list": rows}
+
+    async def nearest_identities(
+        self, *, tenant_id: str, terms: list[str], limit: int
+    ) -> list[dict[str, Any]]:
+        """Nama termirip waktu pencarian nihil — bahan planner untuk menebak ejaan lalu ulang."""
+        if not terms:
+            return []
+
+        stmt = text("""
+            SELECT v.id AS conv_id, v.brand_name, v.full_name,
+                   v.lead_status::text AS lead_status,
+                   ROUND(MAX(GREATEST(
+                       similarity(t.term, COALESCE(v.brand_name, '')),
+                       similarity(t.term, COALESCE(v.full_name, ''))
+                   ))::numeric, 3) AS closeness
+            FROM wa_conversations v
+            CROSS JOIN unnest(CAST(:terms AS text[])) AS t(term)
+            WHERE v.tenant_id = :tenant_id AND NOT v.is_internal
+              AND (COALESCE(v.brand_name, '') <> '' OR COALESCE(v.full_name, '') <> '')
+            GROUP BY v.id, v.brand_name, v.full_name, v.lead_status
+            ORDER BY closeness DESC, v.brand_name
+            LIMIT :limit
+        """)
+        result = await self._session.execute(
+            stmt, {"tenant_id": tenant_id, "terms": terms, "limit": limit}
         )
         return [dict(row) for row in result.mappings().all()]
 
     async def find_conversation(self, *, tenant_id: str, conv_id: str) -> dict[str, Any] | None:
         stmt = text("""
-            SELECT id AS conv_id, full_name, phone_number, brand_name,
-                   lead_status::text AS lead_status, project_value, winning_rate,
-                   mode::text AS mode, note, created_at
-            FROM wa_conversations
-            WHERE id = :conv_id AND tenant_id = :tenant_id AND NOT is_internal
+            SELECT v.id AS conv_id, v.brand_name, v.full_name, v.phone_number,
+                   v.lead_status::text AS lead_status, v.project_value, v.winning_rate,
+                   v.mode::text AS mode, v.note,
+                   v.created_at AS conversation_started_at,
+                   st.inbound_count, st.outbound_count,
+                   st.first_message_at, st.last_message_at
+            FROM wa_conversations v
+            LEFT JOIN LATERAL (
+                SELECT COUNT(*) FILTER (WHERE direction = 'inbound')  AS inbound_count,
+                       COUNT(*) FILTER (WHERE direction = 'outbound') AS outbound_count,
+                       MIN(created_at) AS first_message_at,
+                       MAX(created_at) AS last_message_at
+                FROM wa_chats WHERE conv_id = v.id
+            ) st ON TRUE
+            WHERE v.id = :conv_id AND v.tenant_id = :tenant_id AND NOT v.is_internal
         """)
         result = await self._session.execute(stmt, {"conv_id": conv_id, "tenant_id": tenant_id})
         row = result.mappings().first()
         return dict(row) if row else None
 
-    async def transcript(self, *, conv_id: str, limit: int) -> list[dict[str, Any]]:
-        """Ambil dari yang terbaru supaya percakapan panjang terpotong di ujung lama, bukan baru."""
+    async def transcript(self, *, conv_id: str, limit: int) -> dict[str, Any]:
+        """Diambil dari yang terbaru; total ikut supaya penjawab tahu transkripnya terpotong."""
+        # COUNT(*) OVER () dievaluasi sebelum LIMIT, jadi angkanya total baris yang cocok.
         stmt = text("""
             SELECT direction::text AS direction, type::text AS type,
-                   LEFT(message, :max_chars) AS message, created_at
+                   LEFT(message, :max_chars) AS message, created_at,
+                   COUNT(*) OVER () AS total_message_count
             FROM wa_chats
             WHERE conv_id = :conv_id
             ORDER BY created_at DESC, id DESC
@@ -295,13 +528,69 @@ class RetrievalRepository:
                 "max_chars": MAX_TRANSCRIPT_MESSAGE_CHARS,
             },
         )
-        return list(reversed([dict(row) for row in result.mappings().all()]))
+        rows = [dict(row) for row in result.mappings().all()]
+        total = int(rows[0]["total_message_count"]) if rows else 0
+        for row in rows:
+            row.pop("total_message_count", None)
 
-    async def latest_activity(self, *, tenant_id: str) -> datetime | None:
+        return {
+            "total_message_count": total,
+            "returned_count": len(rows),
+            "truncated": total > len(rows),
+            "list": list(reversed(rows)),
+        }
+
+    async def activity_window(self, *, tenant_id: str) -> tuple[datetime | None, datetime | None]:
+        """Batas awal dan akhir korpus; yang awal menahan perbandingan lari ke luar data."""
         stmt = text("""
-            SELECT MAX(c.created_at)
+            SELECT MIN(c.created_at) AS earliest, MAX(c.created_at) AS latest
             FROM wa_chats c
             JOIN wa_conversations v ON v.id = c.conv_id
             WHERE v.tenant_id = :tenant_id AND NOT v.is_internal
         """)
-        return (await self._session.execute(stmt, {"tenant_id": tenant_id})).scalar_one_or_none()
+        row = (await self._session.execute(stmt, {"tenant_id": tenant_id})).mappings().one()
+        return row["earliest"], row["latest"]
+
+
+def _terms(query: str) -> list[str]:
+    """Pecah query jadi token pencarian, buang kata yang cocok ke mana-mana."""
+    raw = re.findall(r"[0-9a-zA-ZÀ-ɏ]+", query.lower())
+    kept = [t for t in raw if len(t) >= MIN_TERM_CHARS and t not in _STOPWORDS]
+    # Query yang isinya stopword semua tetap harus mencari sesuatu, bukan mengembalikan nihil.
+    if not kept:
+        kept = [t for t in raw if len(t) >= 2]
+    return list(dict.fromkeys(kept))[:MAX_TERMS]
+
+
+def _window(message: str, term: str, width: int) -> str:
+    """Potong pesan panjang di sekitar kata yang cocok, bukan dari awal pesan."""
+    body = (message or "").strip()
+    if len(body) <= width:
+        return body
+
+    at = body.lower().find(term.lower())
+    if at < 0:
+        return body[:width].rstrip() + "…"
+
+    start = max(0, at - width // 3)
+    end = min(len(body), start + width)
+    return ("…" if start > 0 else "") + body[start:end].strip() + ("…" if end < len(body) else "")
+
+
+def _shape_hit(row: dict[str, Any]) -> dict[str, Any]:
+    """Rapikan satu baris hasil pencarian jadi bentuk yang enak dibaca penjawab."""
+    # asyncpg mengembalikan json sebagai string; ORM tidak ikut campur di query text() mentah.
+    raw = row.get("snippets")
+    if isinstance(raw, str):
+        raw = json.loads(raw)
+
+    row["snippets"] = [
+        {
+            "at": s["at"],
+            "speaker": SPEAKER.get(s["direction"], s["direction"]),
+            "exact": s["exact"],
+            "text": _window(s["text"], s["term"], SNIPPET_CHARS),
+        }
+        for s in (raw or [])
+    ]
+    return row

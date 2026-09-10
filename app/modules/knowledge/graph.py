@@ -13,8 +13,8 @@ from app.modules.knowledge.tools import ToolBox
 
 logger = logging.getLogger(__name__)
 
-# Cukup untuk "ambil ringkasan, lalu dalami satu brand"; lebih dari ini biasanya model nyasar.
-MAX_ROUNDS = 3
+# Empat = tiga putaran retrieval; pipeline perluasan sinonim mati kalau cuma dua.
+MAX_ROUNDS = 4
 
 # Hasil satu tool dipotong sebelum masuk prompt penjawab; transkrip panjang paling sering kena.
 MAX_RESULT_CHARS = 12_000
