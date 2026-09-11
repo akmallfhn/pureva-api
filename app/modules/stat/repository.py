@@ -6,6 +6,8 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.stat.schema import ResponseMode
+
 # Satu "turn" = pesan masuk yang membuka giliran balas, yaitu inbound pertama setelah outbound
 # terakhir. Deteksinya harus melihat seluruh riwayat percakapan, jadi filter tanggal baru
 # diterapkan di `resolved`, bukan di `scoped`.
@@ -17,17 +19,18 @@ TURNS_CTE = """
         WHERE v.tenant_id = :tenant_id AND NOT v.is_internal
     ),
     ordered AS (
-        SELECT conv_id, direction, created_at,
+        SELECT id, conv_id, direction, created_at,
                LAG(direction) OVER (PARTITION BY conv_id ORDER BY created_at, id) AS prev_dir
         FROM scoped
     ),
     turns AS (
-        SELECT conv_id, created_at AS inbound_at
+        SELECT conv_id, created_at AS inbound_at,
+               ROW_NUMBER() OVER (PARTITION BY conv_id ORDER BY created_at, id) AS turn_seq
         FROM ordered
         WHERE direction = 'inbound' AND prev_dir IS DISTINCT FROM 'inbound'
     ),
     resolved AS (
-        SELECT t.conv_id, t.inbound_at,
+        SELECT t.conv_id, t.inbound_at, t.turn_seq,
                (SELECT MIN(o.created_at) FROM wa_chats o
                 WHERE o.conv_id = t.conv_id
                   AND o.direction = 'outbound'
@@ -49,20 +52,58 @@ _LAST_MESSAGE_CTE = """
     )
 """
 
+# Jam kerja untuk mode all_working, dibaca pada timezone yang diminta: Senin-Jumat 09.00-18.00.
+WORK_START_SECONDS = 9 * 3600
+WORK_END_SECONDS = 18 * 3600
+WORK_DAY_SECONDS = WORK_END_SECONDS - WORK_START_SECONDS
+# Titik nol hari kerja kumulatif; harus Senin supaya sisa bagi 7 langsung jadi indeks hari.
+WORK_EPOCH = "DATE '2000-01-03'"
+
+
+def _work_seconds_since_epoch(ts: str) -> str:
+    """Detik jam kerja dari WORK_EPOCH sampai `ts`, sebuah timestamp tanpa timezone."""
+    day = f"({ts})::date"
+    days = f"({day} - {WORK_EPOCH})"
+    return f"""(
+                    (({days} / 7) * 5 + LEAST(MOD({days}, 7), 5)) * {WORK_DAY_SECONDS}
+                    + CASE WHEN EXTRACT(ISODOW FROM {day}) < 6
+                           THEN LEAST(GREATEST(
+                                    EXTRACT(EPOCH FROM ({ts})::time) - {WORK_START_SECONDS}, 0),
+                                {WORK_DAY_SECONDS})
+                           ELSE 0 END
+                )"""
+
+
+def _response_seconds(mode: ResponseMode) -> str:
+    """Lama balas satu turn; di mode all_working jeda di luar jam kerja tidak ikut dihitung."""
+    if mode is not ResponseMode.ALL_WORKING:
+        return "EXTRACT(EPOCH FROM replied_at - inbound_at)"
+    reply = _work_seconds_since_epoch("replied_at AT TIME ZONE :tz")
+    inbound = _work_seconds_since_epoch("inbound_at AT TIME ZONE :tz")
+    return f"({reply} - {inbound})"
+
+
+def _measured_cte(mode: ResponseMode) -> str:
+    """Turn yang masuk hitungan response time, sudah dilengkapi lama balasnya dalam detik."""
+    return f"""
+    measured AS (
+        SELECT conv_id, inbound_at, replied_at,
+               {_response_seconds(mode)} AS response_seconds
+        FROM resolved
+        WHERE NOT CAST(:first_turn_only AS boolean) OR turn_seq = 1
+    )
+"""
+
+
 _RESPONSE_AGGREGATES = """
     COUNT(*) AS inbound_turn_count,
-    COUNT(replied_at) AS replied_turn_count,
-    COUNT(*) - COUNT(replied_at) AS unanswered_turn_count,
-    ROUND(EXTRACT(EPOCH FROM PERCENTILE_CONT(0.5) WITHIN GROUP (
-        ORDER BY replied_at - inbound_at) FILTER (WHERE replied_at IS NOT NULL)))::bigint
-        AS median_response_seconds,
-    ROUND(EXTRACT(EPOCH FROM PERCENTILE_CONT(0.9) WITHIN GROUP (
-        ORDER BY replied_at - inbound_at) FILTER (WHERE replied_at IS NOT NULL)))::bigint
-        AS p90_response_seconds,
-    COUNT(*) FILTER (
-        WHERE replied_at IS NOT NULL
-          AND replied_at - inbound_at <= make_interval(secs => :target_seconds)
-    ) AS within_target_count
+    COUNT(response_seconds) AS replied_turn_count,
+    COUNT(*) - COUNT(response_seconds) AS unanswered_turn_count,
+    ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY response_seconds::double precision)
+        FILTER (WHERE response_seconds IS NOT NULL))::bigint AS median_response_seconds,
+    ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY response_seconds::double precision)
+        FILTER (WHERE response_seconds IS NOT NULL))::bigint AS p90_response_seconds,
+    COUNT(*) FILTER (WHERE response_seconds <= :target_seconds) AS within_target_count
 """
 
 
@@ -75,10 +116,18 @@ class StatRepository:
         self._session = session
 
     async def summary(
-        self, *, tenant_id: str, start_at: datetime, end_at: datetime, target_seconds: int
+        self,
+        *,
+        tenant_id: str,
+        start_at: datetime,
+        end_at: datetime,
+        tz: str,
+        target_seconds: int,
+        mode: ResponseMode,
     ) -> dict[str, Any]:
         stmt = text(f"""
             WITH {TURNS_CTE},
+            {_measured_cte(mode)},
             active AS (
                 SELECT DISTINCT conv_id FROM scoped
                 WHERE direction = 'inbound' AND created_at >= :start_at AND created_at < :end_at
@@ -94,7 +143,7 @@ class StatRepository:
                 COUNT(DISTINCT conv_id) FILTER (WHERE replied_at IS NULL)
                     AS unanswered_conversation_count,
                 {_RESPONSE_AGGREGATES}
-            FROM resolved
+            FROM measured
         """)
         result = await self._session.execute(
             stmt,
@@ -102,7 +151,9 @@ class StatRepository:
                 "tenant_id": tenant_id,
                 "start_at": start_at,
                 "end_at": end_at,
+                "tz": tz,
                 "target_seconds": target_seconds,
+                "first_turn_only": mode is ResponseMode.FIRST,
             },
         )
         return dict(result.mappings().one())
@@ -155,10 +206,12 @@ class StatRepository:
         tz: str,
         target_seconds: int,
         exclude_weekend: bool,
+        mode: ResponseMode,
     ) -> list[dict[str, Any]]:
         # Hari tanpa pesan masuk tetap dikembalikan (median null) supaya line chart tidak putus.
         stmt = text(f"""
             WITH {TURNS_CTE},
+            {_measured_cte(mode)},
             days AS (
                 SELECT d::date AS bucket
                 FROM generate_series(
@@ -169,8 +222,8 @@ class StatRepository:
                 WHERE NOT CAST(:exclude_weekend AS boolean) OR EXTRACT(ISODOW FROM d) < 6
             ),
             per_day AS (
-                SELECT (inbound_at AT TIME ZONE :tz)::date AS bucket, inbound_at, replied_at
-                FROM resolved
+                SELECT (inbound_at AT TIME ZONE :tz)::date AS bucket, inbound_at, response_seconds
+                FROM measured
             )
             SELECT
                 days.bucket AS date,
@@ -189,6 +242,7 @@ class StatRepository:
                 "tz": tz,
                 "target_seconds": target_seconds,
                 "exclude_weekend": exclude_weekend,
+                "first_turn_only": mode is ResponseMode.FIRST,
             },
         )
         return _rows(result)

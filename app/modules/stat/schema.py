@@ -1,6 +1,18 @@
 from datetime import date
+from enum import StrEnum
 
 from pydantic import BaseModel, Field
+
+
+class ResponseMode(StrEnum):
+    """Turn mana yang diukur, dan apakah jeda di luar jam kerja ikut dihitung."""
+
+    # Hanya turn pembuka tiap percakapan, jeda apa adanya.
+    FIRST = "first"
+    # Semua turn, jeda dipotong ke jam kerja Senin-Jumat 09.00-18.00.
+    ALL_WORKING = "all_working"
+    # Semua turn, jeda apa adanya.
+    ALL_FLAT = "all_flat"
 
 
 class StatRequest(BaseModel):
@@ -13,14 +25,16 @@ class StatRequest(BaseModel):
 
 
 class TargetRequest(StatRequest):
-    """Field untuk endpoint yang mengukur first response terhadap sebuah target."""
+    """Field untuk endpoint yang mengukur response time terhadap sebuah target."""
 
     # Target first response dari dokumen evaluasi: 15 menit.
     target_seconds: int = Field(default=900, ge=1, le=86_400)
+    # Default mempertahankan angka lama: semua turn, tanpa potongan jam kerja.
+    response_mode: ResponseMode = ResponseMode.ALL_FLAT
 
 
 class ResponseTimeRequest(TargetRequest):
-    # Sabtu–Minggu dibuang dari seri kalau tim memang tidak berjaga di akhir pekan.
+    # Sabtu-Minggu dibuang dari seri kalau tim memang tidak berjaga di akhir pekan.
     exclude_weekend: bool = False
 
 

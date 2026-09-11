@@ -1,6 +1,6 @@
 # Stat
 
-Read-only aggregate endpoints untuk dashboard evaluasi 360° WhatsApp brand deals: volume percakapan harian, first response time (median/p90), heatmap jam inbound, funnel lead status beserta nilai project, daftar chat tanpa balasan, dan daftar brand deal yang sedang berjalan.
+Read-only aggregate endpoints untuk dashboard evaluasi 360° WhatsApp brand deals: volume percakapan harian, response time (median/p90), heatmap jam inbound, funnel lead status beserta nilai project, daftar chat tanpa balasan, dan daftar brand deal yang sedang berjalan.
 
 Semua angka dihitung langsung dari `wa_conversations` + `wa_chats` dan di-scope per tenant lewat `tenant_id` — tidak ada laporan manual dan tidak ada tabel agregat terpisah. Semua endpoint memakai `POST`, diautentikasi dengan Bearer token statis dari environment `CLIENT_SECRET`.
 
@@ -8,13 +8,23 @@ Percakapan dengan `wa_conversations.is_internal = true` — kontak tim sendiri �
 
 Setiap request menerima `start_date`/`end_date` (inklusif, format `YYYY-MM-DD`) dan `timezone` (nama IANA, default `Asia/Jakarta`). Bucket harian dan heatmap dihitung pada zona waktu tersebut, bukan UTC. Jika `start_date`/`end_date` dikosongkan, rentang default adalah 30 hari terakhir sampai hari ini; rentang maksimum 366 hari.
 
-Definisi **turn**: satu pesan masuk yang membuka giliran balas, yaitu inbound pertama setelah outbound terakhir. Beberapa pesan inbound beruntun tanpa balasan dihitung sebagai satu turn. **First response time** = selisih waktu turn tersebut ke pesan outbound pertama sesudahnya; turn tanpa outbound sesudahnya dihitung sebagai *unanswered*.
+Definisi **turn**: satu pesan masuk yang membuka giliran balas, yaitu inbound pertama setelah outbound terakhir. Beberapa pesan inbound beruntun tanpa balasan dihitung sebagai satu turn. **Response time** = selisih waktu turn tersebut ke pesan outbound pertama sesudahnya; turn tanpa outbound sesudahnya dihitung sebagai *unanswered*.
+
+`summary` dan `response-time` menerima **`response_mode`**, yang menentukan turn mana yang diukur dan bagaimana jedanya dihitung:
+
+| `response_mode` | Turn yang diukur | Jeda dihitung |
+|---|---|---|
+| `first` | hanya turn pembuka tiap percakapan | apa adanya |
+| `all_working` | semua turn | hanya detik yang jatuh pada Senin–Jumat 09.00–18.00 di `timezone` yang diminta |
+| `all_flat` (default) | semua turn | apa adanya |
+
+Mode berlaku untuk **seluruh** angka response di respons yang sama — `inbound_turn_count`, `replied_turn_count`, `unanswered_*`, median, p90, dan `within_target_*` — supaya satu payload tidak pernah mencampur dua definisi. Pada `all_working`, turn yang masuk Sabtu 10.00 dan dibalas Senin 09.05 berjeda 5 menit, bukan dua hari; libur nasional belum dikecualikan, jadi tanggal merah masih dihitung sebagai hari kerja. Default `all_flat` mempertahankan angka versi sebelumnya. Daftar `unanswered/list` tidak terpengaruh `response_mode` — isinya selalu semua turn.
 
 ## Endpoints
 
 ### `POST {base_url}/api/v1/stats/summary`
 
-Mengembalikan kartu ringkasan dashboard: volume inbound, first response median/p90, jumlah tanpa balasan, dan persentase pencapaian target.
+Mengembalikan kartu ringkasan dashboard: volume inbound, response time median/p90, jumlah tanpa balasan, dan persentase pencapaian target.
 
 **Method:** `POST`
 
@@ -28,7 +38,8 @@ Mengembalikan kartu ringkasan dashboard: volume inbound, first response median/p
   "start_date": "2026-08-04",
   "end_date": "2026-09-02",
   "timezone": "Asia/Jakarta",
-  "target_seconds": 900
+  "target_seconds": 900,
+  "response_mode": "all_flat"
 }
 ```
 
@@ -39,6 +50,7 @@ Mengembalikan kartu ringkasan dashboard: volume inbound, first response median/p
 | `end_date` | string (`YYYY-MM-DD`) | no |
 | `timezone` | string (IANA) | no |
 | `target_seconds` | integer (1–86400) | no |
+| `response_mode` | `first` \| `all_working` \| `all_flat` | no |
 
 **Response** — `200 OK`
 
@@ -53,6 +65,7 @@ Mengembalikan kartu ringkasan dashboard: volume inbound, first response median/p
     "end_date": "2026-09-02",
     "timezone": "Asia/Jakarta",
     "target_seconds": 900,
+    "response_mode": "all_flat",
     "active_conversation_count": 11,
     "new_conversation_count": 11,
     "inbound_per_day": 0.37,
@@ -69,7 +82,7 @@ Mengembalikan kartu ringkasan dashboard: volume inbound, first response median/p
 }
 ```
 
-`median_response_seconds` dan `p90_response_seconds` bernilai `null` jika tidak ada satu pun turn yang dibalas pada rentang tersebut.
+`median_response_seconds` dan `p90_response_seconds` bernilai `null` jika tidak ada satu pun turn yang dibalas pada rentang tersebut. `response_mode` dikembalikan apa adanya supaya klien tahu definisi mana yang dipakai untuk angka di payload ini.
 
 **Errors**
 
@@ -155,7 +168,7 @@ Setiap hari pada rentang selalu muncul, termasuk hari tanpa pesan masuk.
 
 ### `POST {base_url}/api/v1/stats/response-time`
 
-Mengembalikan first response time median dan p90 per hari, beserta jumlah turn yang dibalas di bawah target.
+Mengembalikan response time median dan p90 per hari, beserta jumlah turn yang dibalas di bawah target.
 
 **Method:** `POST`
 
@@ -170,6 +183,7 @@ Mengembalikan first response time median dan p90 per hari, beserta jumlah turn y
   "end_date": "2026-09-02",
   "timezone": "Asia/Jakarta",
   "target_seconds": 900,
+  "response_mode": "all_flat",
   "exclude_weekend": true
 }
 ```
@@ -181,6 +195,7 @@ Mengembalikan first response time median dan p90 per hari, beserta jumlah turn y
 | `end_date` | string (`YYYY-MM-DD`) | no |
 | `timezone` | string (IANA) | no |
 | `target_seconds` | integer (1–86400) | no |
+| `response_mode` | `first` \| `all_working` \| `all_flat` | no |
 | `exclude_weekend` | boolean | no |
 
 **Response** — `200 OK`
@@ -196,6 +211,7 @@ Mengembalikan first response time median dan p90 per hari, beserta jumlah turn y
     "end_date": "2026-09-02",
     "timezone": "Asia/Jakarta",
     "target_seconds": 900,
+    "response_mode": "all_flat",
     "exclude_weekend": true,
     "list": [
       {
@@ -223,7 +239,7 @@ Mengembalikan first response time median dan p90 per hari, beserta jumlah turn y
 }
 ```
 
-Hari tanpa pesan masuk tetap dikembalikan dengan median dan p90 `null`, supaya garis pada chart tidak terputus. `exclude_weekend` bernilai `true` membuang Sabtu dan Minggu dari seri — turn yang jatuh di akhir pekan tidak ikut dihitung sama sekali. Default `false`: semua hari dikembalikan.
+Hari tanpa pesan masuk tetap dikembalikan dengan median dan p90 `null`, supaya garis pada chart tidak terputus. `exclude_weekend` bernilai `true` membuang Sabtu dan Minggu dari seri — turn yang jatuh di akhir pekan tidak ikut dihitung sama sekali. Default `false`: semua hari dikembalikan. `exclude_weekend` memilih hari mana yang muncul di seri, `response_mode` memilih bagaimana tiap turn diukur — keduanya berdiri sendiri.
 
 **Errors**
 

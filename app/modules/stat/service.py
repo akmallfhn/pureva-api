@@ -69,7 +69,9 @@ class StatService:
             tenant_id=tenant_id,
             start_at=start_at,
             end_at=end_at,
+            tz=tz_name,
             target_seconds=req.target_seconds,
+            mode=req.response_mode,
         )
 
         days = (end_at.date() - start_at.date()).days
@@ -77,6 +79,7 @@ class StatService:
         return {
             **self._period(start_at, end_at, tz_name),
             "target_seconds": req.target_seconds,
+            "response_mode": req.response_mode.value,
             "active_conversation_count": row["active_conversation_count"],
             "new_conversation_count": row["new_conversation_count"],
             "inbound_per_day": round(row["active_conversation_count"] / days, 2) if days else 0,
@@ -111,10 +114,12 @@ class StatService:
             tz=tz_name,
             target_seconds=req.target_seconds,
             exclude_weekend=req.exclude_weekend,
+            mode=req.response_mode,
         )
         return {
             **self._period(start_at, end_at, tz_name),
             "target_seconds": req.target_seconds,
+            "response_mode": req.response_mode.value,
             "exclude_weekend": req.exclude_weekend,
             "list": [
                 {
